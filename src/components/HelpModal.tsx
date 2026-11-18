@@ -88,8 +88,9 @@ export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onC
           <li>Tras escribir, la nota queda seleccionada: usa ♯ ♭ ♮, staccato, acento o ligadura en la paleta izquierda.</li>
           <li>
             Escribe el <b>compás entero</b> a tu ritmo (cabezas, plicas, corchetes, ♯ ♭ ♮ delante de la nota y la barra
-            de compás). Se convierte tras ~0,8 s sin tocar la pantalla, o con el botón <b>Convertir</b> / Intro. Con
-            «Con botón» solo se convierte cuando tú lo pidas. Lo que no sea música (textos, flechas) queda como anotación.
+            de compás). Nada se convierte mientras escribes: el compás se digitaliza cuando suma <b>4/4</b>, o antes si
+            tocas <b>Convertir</b> (muestra cuántos tiempos llevas) o Intro. Con «Con botón» solo se convierte cuando tú
+            lo pidas. Lo que no sea música (textos, flechas) queda como anotación.
           </li>
           <li>Zoom: pellizca con dos dedos (o el trackpad del Mac, o ⌘+ / ⌘−); dos dedos también desplazan la hoja.</li>
           <li>

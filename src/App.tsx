@@ -112,6 +112,9 @@ export default function App() {
 
   const setMode = useCallback((m: EditMode) => {
     setModeState(m)
+    // Elegir una herramienta (Notas, Anotar, Goma) termina "mover la hoja": si no, la goma o el lápiz
+    // arrastrarían la foto en vez de borrar o escribir.
+    setAdjustBg(false)
     if (m !== 'notes') setSelectedId(null)
   }, [])
 
@@ -741,18 +744,18 @@ export default function App() {
               <motion.button
                 type="button"
                 aria-pressed={autoConvert}
-                aria-label={autoConvert ? 'Convertir al hacer una pausa' : 'Convertir solo con el botón'}
-                title={autoConvert ? 'Convierte al hacer una pausa (toca para usar solo el botón Convertir)' : 'Convierte solo con el botón Convertir o Intro'}
+                aria-label={autoConvert ? 'Convertir al completar el compás' : 'Convertir solo con el botón'}
+                title={autoConvert ? 'Convierte cuando el compás suma 4/4 (toca para usar solo el botón Convertir)' : 'Convierte solo con el botón Convertir o Intro'}
                 onClick={() => {
                   setAutoConvert((v) => !v)
-                  showToast(autoConvert ? 'Escribe el compás entero y toca «Convertir» (o Intro)' : 'Se convierte solo al hacer una pausa')
+                  showToast(autoConvert ? 'Escribe el compás entero y toca «Convertir» (o Intro)' : 'Se convierte cada compás al completar 4/4')
                 }}
                 whileTap={{ scale: 0.86 }}
                 transition={ELASTIC}
                 className="pointer-events-auto flex h-11 items-center gap-1.5 rounded-full border border-line bg-panel px-3 text-xs font-extrabold shadow"
               >
                 {autoConvert ? <Hourglass size={16} /> : <MousePointerClick size={16} />}
-                <span className="hidden lg:inline">{autoConvert ? 'Al pausar' : 'Con botón'}</span>
+                <span className="hidden lg:inline">{autoConvert ? 'Compás completo' : 'Con botón'}</span>
               </motion.button>
             )}
             <motion.button

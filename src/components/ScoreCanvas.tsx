@@ -9,9 +9,12 @@ import {
   clampStep,
   describeDiff,
   effectiveAccidental,
+  DUR_UNITS,
   makeNote,
   makeRest,
+  MEASURE_UNITS,
   measureStatus,
+  measureUnits,
   newId,
   soundingMidi,
   writtenMidi,
@@ -29,6 +32,8 @@ import {
 } from '../notation/annotations'
 import { drawStroke } from './ink'
 import { usePenSurface } from '../input/pen'
+import { eraseOnImage, touchesImage } from '../scan/eraseScan'
+import { getImage, putImage } from '../state/library'
 import { ELASTIC } from './springs'
 import { Camera, Check } from 'lucide-react'
 
@@ -66,7 +71,7 @@ interface Props {
   onBackground: (bg: Background, record?: boolean) => void
   /** Abre el escaneo/importación (botón de la hoja vacía). */
   onScan: () => void
-  /** true: convierte tras la pausa; false: solo con el botón Convertir. */
+  /** true: convierte cada compás al completar 4/4; false: solo con el botón Convertir. */
   autoConvert: boolean
   /** Zoom de Mila (pellizco): 1 = hoja ajustada al ancho. */
   userZoom: number
@@ -170,7 +175,8 @@ export function ScoreCanvas(p: Props) {
   }, [p.measures, width, bg?.layoutWidth, bg?.perRow, bg?.rowH, bg?.rowWidths])
 
   // ---- Canvas de tinta ----------------------------------------------------
-  const pendingRef = useRef<{ stroke: Stroke; pen: boolean }[]>([])
+  /** Tinta aún sin convertir; `measure` = compás donde se escribió (-1 fuera de los pentagramas). */
+  const pendingRef = useRef<{ stroke: Stroke; pen: boolean; measure: number }[]>([])
   const activeRef = useRef<Active | null>(null)
   const rafRef = useRef(0)
 
@@ -293,42 +299,18 @@ export function ScoreCanvas(p: Props) {
     return bestD <= 95 ? best : -1
   }
 
-  /** Caja de la tinta pendiente de convertir (para el botón "Convertir"). */
-  const [pendingBox, setPendingBox] = useState<{ x: number; y: number } | null>(null)
-  const updatePendingBox = useCallback(() => {
-    const all = pendingRef.current.flatMap((p) => p.stroke)
-    if (!all.length) return setPendingBox(null)
-    const b = bbox(all)
-    setPendingBox({ x: b.x1, y: b.y0 })
-  }, [])
+  interface Ins {
+    measure: number
+    x: number
+    note: Note
+    row: number
+  }
 
   /**
-   * Convierte TODA la tinta pendiente (el compás entero que Mila haya escrito) de una vez:
-   * notas y silencios → partitura; barras de compás → se aceptan; alteraciones sueltas → a su nota;
-   * lo que claramente no es música (texto, flechas, fuera del pentagrama) → se conserva como anotación.
+   * Lee la tinta SIN convertirla: qué notas/silencios, alteraciones y anotaciones saldrían. Sirve para
+   * convertir y también para saber, antes de convertir, si el compás ya suma 4/4.
    */
-  const flush = useCallback(() => {
-    window.clearTimeout(timerRef.current)
-    const l = layoutRef.current
-    const pending = pendingRef.current
-    const strokes = pending.map((s) => s.stroke)
-    const penUsed = pending.some((s) => s.pen)
-    if (strokes.length > 0) {
-      const all = bbox(strokes.flat())
-      ghostInk(all.cx, all.cy)
-    }
-    pendingRef.current = []
-    setPendingBox(null)
-    redrawInk()
-    if (!l || strokes.length === 0) return
-    const cur = propsRef.current
-
-    interface Ins {
-      measure: number
-      x: number
-      note: Note
-      row: number
-    }
+  const readInk = (strokes: Stroke[], l: Layout) => {
     const inserts: Ins[] = []
     const looseAcc: { acc: Exclude<Note['acc'], ''>; x: number; row: number }[] = []
     const toAnnotate: Stroke[][] = []
@@ -377,6 +359,81 @@ export function ScoreCanvas(p: Props) {
         rec.kind === 'rest' ? makeRest(rec.dur) : makeNote({ dur: rec.dur, step: rec.step, acc: rec.acc ?? '' })
       inserts.push({ measure: mbox.index, x: rec.x, note, row })
     }
+
+    return { inserts, looseAcc, toAnnotate, unknown }
+  }
+
+  /** Compás (índice) donde cae un trazo: por el centro de su caja. -1 si está fuera de los pentagramas. */
+  const measureFor = (stroke: Stroke, l: Layout): number => {
+    const b = bbox(stroke)
+    const row = rowFor(b.cy, l)
+    if (row < 0) return -1
+    const st = l.rows[row]
+    if (b.y1 < st.yTop - 15 || b.y0 > st.yBottom + 15) return -1
+    const inRow = l.measures.filter((m) => m.row === row)
+    const hit = inRow.find((m) => b.cx >= m.x && b.cx < m.x + m.w)
+    if (hit) return hit.index
+    let best = -1
+    let bestD = Infinity
+    for (const m of inRow) {
+      const d = Math.min(Math.abs(b.cx - m.x), Math.abs(b.cx - (m.x + m.w)))
+      if (d < bestD) {
+        bestD = d
+        best = m.index
+      }
+    }
+    return best
+  }
+
+  /** Lectura provisional de un compás: duración ya escrita + la de su tinta pendiente, y si hay algo dudoso. */
+  const readMeasure = (mi: number) => {
+    const l = layoutRef.current
+    const done = measureUnits(propsRef.current.measures[mi] ?? [])
+    const strokes = pendingRef.current.filter((s) => s.measure === mi).map((s) => s.stroke)
+    if (!l || !strokes.length) return { units: done, unknown: 0 }
+    const r = readInk(strokes, l)
+    const units = r.inserts.filter((i) => i.measure === mi).reduce((sum, i) => sum + DUR_UNITS[i.note.dur], done)
+    return { units, unknown: r.unknown }
+  }
+  const unitsIn = (mi: number) => readMeasure(mi).units
+
+  /** Caja de la tinta pendiente de convertir (para el botón "Convertir"). */
+  const [pendingBox, setPendingBox] = useState<{ x: number; y: number; beats: number | null } | null>(null)
+  const updatePendingBox = useCallback(() => {
+    const all = pendingRef.current.flatMap((p) => p.stroke)
+    if (!all.length) return setPendingBox(null)
+    const b = bbox(all)
+    // Progreso del compás que se está escribiendo (lo ya convertido + la tinta leída), en tiempos de negra.
+    const last = pendingRef.current[pendingRef.current.length - 1].measure
+    const units = last >= 0 ? unitsIn(last) : null
+    setPendingBox({ x: b.x1, y: b.y0, beats: units === null ? null : units / 4 })
+  }, [])
+
+  /**
+   * Convierte TODA la tinta pendiente (el compás entero que Mila haya escrito) de una vez:
+   * notas y silencios → partitura; barras de compás → se aceptan; alteraciones sueltas → a su nota;
+   * lo que claramente no es música (texto, flechas, fuera del pentagrama) → se conserva como anotación.
+   */
+  const flush = useCallback((only?: Set<number>) => {
+    window.clearTimeout(timerRef.current)
+    const l = layoutRef.current
+    // Sin `only` se convierte todo; con `only`, solo esos compases (más la tinta fuera de los pentagramas).
+    const take = (s: (typeof pendingRef.current)[number]) => !only || s.measure < 0 || only.has(s.measure)
+    const pending = pendingRef.current.filter(take)
+    pendingRef.current = pendingRef.current.filter((s) => !take(s))
+    const strokes = pending.map((s) => s.stroke)
+    const penUsed = pending.some((s) => s.pen)
+    if (strokes.length > 0) {
+      const all = bbox(strokes.flat())
+      ghostInk(all.cx, all.cy)
+    }
+    updatePendingBox()
+    redrawInk()
+    if (!l || strokes.length === 0) return
+    const cur = propsRef.current
+    const read = readInk(strokes, l)
+    const { inserts, looseAcc, toAnnotate } = read
+    let unknown = read.unknown
 
     // Alteraciones sueltas: a la nota más cercana a su derecha (nueva o ya escrita).
     const accOnExisting = new Map<string, Exclude<Note['acc'], ''>>()
@@ -441,9 +498,27 @@ export function ScoreCanvas(p: Props) {
   }, [redrawInk, ghostInk])
 
   /**
+   * Compás completo: la tinta NO se convierte mientras se escribe. Tras una pausa natural del lápiz se LEE
+   * (sin convertir) cada compás con tinta, y solo se digitaliza el que ya suma 4/4 sin trazos dudosos.
+   * Un compás a medias se queda como tinta hasta completarlo o hasta pulsar Convertir / Intro.
+   * Con "convertir con botón" no hay comprobación automática: solo el botón (o Intro).
+   */
+  const evaluate = useCallback(() => {
+    if (activeRef.current) return
+    const full = new Set<number>()
+    for (const mi of new Set(pendingRef.current.map((s) => s.measure))) {
+      if (mi < 0) continue
+      const r = readMeasure(mi)
+      if (r.units >= MEASURE_UNITS && r.unknown === 0) full.add(mi)
+    }
+    if (full.size) flush(full)
+    else updatePendingBox()
+    // readMeasure solo usa refs: no hace falta en las dependencias.
+  }, [flush, updatePendingBox])
+
+  /**
    * Pausa natural: el reloj arranca al levantar el lápiz y se reinicia al volver a apoyarlo, así Mila puede
-   * escribir el compás entero sin cortes. Si el Pencil sigue flotando se espera algo más (con tope).
-   * Con "convertir con botón" no hay reloj: solo el botón Convertir (o Intro) convierte.
+   * escribir cabeza + plica + corchete sin cortes. Si el Pencil sigue flotando se espera algo más (con tope).
    */
   const idleSince = useRef(0)
   const queueFlush = useCallback(
@@ -456,9 +531,9 @@ export function ScoreCanvas(p: Props) {
       const wait = hover
         ? Math.min(RECOGNIZE_DELAY, Math.max(0, MAX_WAIT - (now - idleSince.current)))
         : RECOGNIZE_DELAY
-      timerRef.current = window.setTimeout(flush, wait)
+      timerRef.current = window.setTimeout(evaluate, wait)
     },
-    [flush, updatePendingBox],
+    [evaluate, updatePendingBox],
   )
 
   // "Convertir" desde fuera (tecla Intro).
@@ -707,6 +782,8 @@ export function ScoreCanvas(p: Props) {
     const l = layoutRef.current
     const cur = propsRef.current
     const ids = a.erased
+    // La partitura escaneada es un calco editable: la goma también borra lo que hay en la foto.
+    if (cur.background && touchesImage(cur.background, a.pts, ERASE_R)) erasePhoto(a.pts)
     if (!l || ids.size === 0) return
     const notes = l.notes.filter((n) => ids.has(n.id))
     const hasAnns = cur.annotations.some((an) => ids.has(an.id))
@@ -718,6 +795,33 @@ export function ScoreCanvas(p: Props) {
     if (hasAnns) cur.setAnnotations((list) => list.filter((an) => !ids.has(an.id)), notes.length === 0)
     const stamp = Math.round(performance.now())
     setBursts((b) => [...b, ...notes.map((n) => ({ id: `e-${n.id}-${stamp}`, x: n.x, y: n.y, erase: true }))])
+  }
+
+  /** Pinta del color del papel la zona de la foto por donde pasó la goma (imagen nueva: Deshacer la recupera). */
+  // Los borrados se encadenan: cada gesto se aplica sobre la imagen que dejó el anterior (aunque React aún
+  // no haya repintado con el fondo nuevo).
+  const photoQueue = useRef<Promise<void>>(Promise.resolve())
+  const lastPhotoBg = useRef<Background | null>(null)
+  const erasePhoto = (pts: Pt[]) => {
+    photoQueue.current = photoQueue.current.then(async () => {
+      const shown = propsRef.current.background
+      if (lastPhotoBg.current && shown?.imageId === lastPhotoBg.current.imageId) lastPhotoBg.current = null
+      const bg = lastPhotoBg.current ?? shown
+      if (!bg) return
+      try {
+        const blob = await getImage(bg.imageId)
+        if (!blob) return
+        const next = await eraseOnImage(blob, bg, [pts], ERASE_R)
+        if (!next) return
+        const imageId = newId()
+        await putImage(imageId, next)
+        const nextBg = { ...bg, imageId }
+        lastPhotoBg.current = nextBg
+        propsRef.current.onBackground(nextBg, true)
+      } catch {
+        propsRef.current.onToast('No pude borrar en la foto', 'warn')
+      }
+    })
   }
 
   /** Gesto de goma cancelado (p.ej. por el sistema): se restaura lo atenuado. */
@@ -898,7 +1002,7 @@ export function ScoreCanvas(p: Props) {
       }
     }
 
-    pendingRef.current.push({ stroke, pen: a.pen })
+    pendingRef.current.push({ stroke, pen: a.pen, measure: l ? measureFor(stroke, l) : -1 })
     redrawInk()
     queueFlush()
   }
@@ -1155,6 +1259,11 @@ export function ScoreCanvas(p: Props) {
               style={{ left: pendingBox.x + 8, top: Math.max(4, pendingBox.y - 40) }}
             >
               <Check size={15} strokeWidth={3} /> Convertir
+              {pendingBox.beats !== null && (
+                <span className="font-semibold opacity-80">
+                  · {Number.isInteger(pendingBox.beats) ? pendingBox.beats : pendingBox.beats.toFixed(2).replace(/0$/, '')}/4
+                </span>
+              )}
             </motion.button>
           )}
         </AnimatePresence>
