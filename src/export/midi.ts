@@ -1,0 +1,61 @@
+import type { Score } from '../types'
+import { buildEvents } from '../state/music'
+
+const PPQ = 480
+const UNIT_TICKS = PPQ / 4
+
+function vlq(value: number): number[] {
+  let v = Math.max(0, Math.round(value))
+  const bytes = [v & 0x7f]
+  while ((v >>= 7) > 0) bytes.unshift((v & 0x7f) | 0x80)
+  return bytes
+}
+const u32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]
+const u16 = (n: number) => [(n >>> 8) & 255, n & 255]
+const ascii = (s: string) => Array.from(s).map((c) => c.charCodeAt(0) & 0x7f)
+
+/** MIDI formato 0 con la altura sonora (respeta la transposición elegida). */
+export function scoreToMidi(score: Score): Uint8Array {
+  const { events } = buildEvents(score.measures, score.transposition)
+  const track: number[] = []
+
+  const usPerQuarter = Math.round(60_000_000 / score.bpm)
+  track.push(0x00, 0xff, 0x51, 0x03, (usPerQuarter >> 16) & 255, (usPerQuarter >> 8) & 255, usPerQuarter & 255)
+  track.push(0x00, 0xff, 0x58, 0x04, 4, 2, 24, 8) // 4/4
+  const name = ascii(score.title || 'MILA')
+  track.push(0x00, 0xff, 0x03, ...vlq(name.length), ...name)
+  track.push(0x00, 0xc0, 56) // programa 57: Trumpet
+
+  interface Msg {
+    tick: number
+    order: number
+    bytes: number[]
+  }
+  const msgs: Msg[] = []
+  for (const ev of events) {
+    if (ev.midi === null) continue
+    const start = ev.startUnits * UNIT_TICKS
+    const len = ev.durUnits * UNIT_TICKS * (ev.staccato ? 0.45 : ev.slurToNext ? 1 : 0.94)
+    const vel = ev.accent ? 118 : 88
+    msgs.push({ tick: start, order: 1, bytes: [0x90, ev.midi & 127, vel] })
+    msgs.push({ tick: Math.round(start + len), order: 0, bytes: [0x80, ev.midi & 127, 0] })
+  }
+  msgs.sort((a, b) => a.tick - b.tick || a.order - b.order)
+  let last = 0
+  for (const m of msgs) {
+    track.push(...vlq(m.tick - last), ...m.bytes)
+    last = m.tick
+  }
+  track.push(0x00, 0xff, 0x2f, 0x00)
+
+  return new Uint8Array([
+    ...ascii('MThd'),
+    ...u32(6),
+    ...u16(0),
+    ...u16(1),
+    ...u16(PPQ),
+    ...ascii('MTrk'),
+    ...u32(track.length),
+    ...track,
+  ])
+}

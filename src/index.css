@@ -1,0 +1,94 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #fff1d6;
+  --paper: #fffaf0;
+  --panel: #fffdf7;
+  --ink: #2b2118;
+  --muted: #8a7a68;
+  --line: #eadcc2;
+  --coral: #ff6b4a;
+  --sun: #ffc53d;
+  --mint: #2fc9a0;
+  --sky: #4aa8ff;
+  --warn: #ff9f1c;
+  --bad: #e5484d;
+  --good: #2fc9a0;
+}
+.dark {
+  --bg: #12101d;
+  --paper: #1d1a2e;
+  --panel: #26223b;
+  --ink: #f6eedb;
+  --muted: #9d94b4;
+  --line: #3a3556;
+  --coral: #ff7f62;
+  --sun: #ffd166;
+  --mint: #4be0b8;
+  --sky: #6bb8ff;
+  --warn: #ffb347;
+  --bad: #ff6b70;
+  --good: #4be0b8;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-paper: var(--paper);
+  --color-panel: var(--panel);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-coral: var(--coral);
+  --color-sun: var(--sun);
+  --color-mint: var(--mint);
+  --color-sky: var(--sky);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --font-sans: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+#root {
+  height: 100%;
+  height: 100dvh; /* iPadOS: la barra de Safari no tapa la barra de transporte */
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.35s ease, color 0.35s ease;
+}
+input {
+  -webkit-user-select: text;
+  user-select: text;
+}
+button {
+  font: inherit;
+  color: inherit;
+  touch-action: manipulation;
+}
+
+/* Partitura: VexFlow fija fill/stroke negros en el <svg> raíz; el CSS los sustituye por la tinta del tema
+   (los hijos con fill="none" / stroke="none" propios no cambian). */
+.score-svg svg {
+  display: block;
+  overflow: visible;
+  fill: var(--ink);
+  stroke: var(--ink);
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+}
