@@ -1,6 +1,6 @@
 /**
  * Importación de partituras en papel: foto de la cámara, imagen o PDF. Todo se convierte en una única imagen
- * JPEG de tamaño razonable que se guarda en el iPad como fondo de la hoja.
+ * JPEG de tamaño razonable que se guarda en el iPad como fondo de la hoja (y se analiza para sacar las notas).
  */
 
 /** Ancho máximo de la imagen guardada (suficiente para leer bien la partitura sin llenar el iPad). */
@@ -14,6 +14,8 @@ export interface ScanResult {
   blob: Blob
   width: number
   height: number
+  /** La imagen ya procesada, para el reconocimiento de notas (OMR) sin volver a decodificar. */
+  canvas: HTMLCanvasElement
   /** Páginas del PDF original (si lo era) y cuántas se incluyeron. */
   pages?: { total: number; used: number }
   /** Nombre sugerido para la partitura (del archivo). */
@@ -43,37 +45,83 @@ export function fitSize(w: number, h: number): { w: number; h: number } {
   return { w: Math.max(1, Math.round(w * s)), h: Math.max(1, Math.round(h * s)) }
 }
 
-async function imageToScan(file: File): Promise<ScanResult> {
+function whiteCanvas(w: number, h: number): { c: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const ctx = c.getContext('2d')
+  if (!ctx) throw new Error('El iPad no tiene memoria suficiente para esta imagen. Prueba con una foto más pequeña.')
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, w, h)
+  return { c, ctx }
+}
+
+/** Carga una imagen de forma tolerante: <img> (respeta la orientación EXIF del iPad) y, si falla, createImageBitmap. */
+async function loadBitmap(file: File): Promise<{ src: CanvasImageSource; w: number; h: number; done: () => void }> {
   const url = URL.createObjectURL(file)
   try {
     const img = new Image()
-    img.decoding = 'async'
-    img.src = url
-    // <img> aplica la orientación EXIF de las fotos del iPad.
-    await img.decode().catch(() => {
-      throw new Error('No pude abrir esa imagen. Prueba con una foto JPG/PNG o un PDF.')
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve()
+      img.onerror = () => reject(new Error('img'))
+      img.src = url
     })
-    const { w, h } = fitSize(img.naturalWidth, img.naturalHeight)
-    const c = document.createElement('canvas')
-    c.width = w
-    c.height = h
-    const ctx = c.getContext('2d')!
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, w, h)
-    ctx.drawImage(img, 0, 0, w, h)
-    return { blob: await canvasToJpeg(c), width: w, height: h, title: titleFrom(file) }
+    if (img.naturalWidth > 0) return { src: img, w: img.naturalWidth, h: img.naturalHeight, done: () => URL.revokeObjectURL(url) }
+  } catch {
+    /* se intenta otra vía */
+  }
+  URL.revokeObjectURL(url)
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bmp = await createImageBitmap(file)
+      return { src: bmp, w: bmp.width, h: bmp.height, done: () => bmp.close() }
+    } catch {
+      /* formato no soportado */
+    }
+  }
+  throw new Error('No pude abrir esa imagen. Usa una foto JPG/PNG/HEIC o un PDF.')
+}
+
+async function imageToScan(file: File): Promise<ScanResult> {
+  const bmp = await loadBitmap(file)
+  try {
+    const { w, h } = fitSize(bmp.w, bmp.h)
+    const { c, ctx } = whiteCanvas(w, h)
+    ctx.drawImage(bmp.src, 0, 0, w, h)
+    return { blob: await canvasToJpeg(c), width: w, height: h, canvas: c, title: titleFrom(file) }
   } finally {
-    URL.revokeObjectURL(url)
+    bmp.done()
   }
 }
 
-async function pdfToScan(file: File): Promise<ScanResult> {
-  // pdf.js se carga solo al importar un PDF (y queda disponible sin conexión gracias al service worker).
-  const pdfjs = await import('pdfjs-dist')
-  const worker = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default
+/**
+ * pdf.js en su versión "legacy": la normal usa funciones de JavaScript muy recientes que Safari del iPad aún no
+ * tiene y fallaba con errores como "can't find iterator" u "Object not valid".
+ */
+async function loadPdfJs() {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const worker = (await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')).default
   pdfjs.GlobalWorkerOptions.workerSrc = worker
-  const task = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) })
-  const doc = await task.promise
+  return pdfjs
+}
+
+async function pdfToScan(file: File): Promise<ScanResult> {
+  let pdfjs: Awaited<ReturnType<typeof loadPdfJs>>
+  try {
+    pdfjs = await loadPdfJs()
+  } catch {
+    throw new Error('No se pudo cargar el lector de PDF. Comprueba la conexión la primera vez y vuelve a intentarlo.')
+  }
+  const data = new Uint8Array(await file.arrayBuffer())
+  const task = pdfjs.getDocument({ data, useSystemFonts: true })
+  let doc: Awaited<typeof task.promise>
+  try {
+    doc = await task.promise
+  } catch (e) {
+    void task.destroy()
+    const msg = e instanceof Error ? e.message : ''
+    throw new Error(/password/i.test(msg) ? 'Ese PDF tiene contraseña: ábrelo y expórtalo sin ella.' : 'No pude leer ese PDF. ¿Está completo?')
+  }
   try {
     const total = doc.numPages
     const used = Math.min(total, MAX_PDF_PAGES)
@@ -81,15 +129,11 @@ async function pdfToScan(file: File): Promise<ScanResult> {
     for (let i = 1; i <= used; i++) {
       const page = await doc.getPage(i)
       const base = page.getViewport({ scale: 1 })
-      const target = fitSize(base.width * 4, base.height * 4) // alta resolución, luego se ajusta al tope
+      const target = fitSize(base.width * 4, base.height * 4) // alta resolución, dentro del tope
       const viewport = page.getViewport({ scale: target.w / base.width })
-      const c = document.createElement('canvas')
-      c.width = Math.round(viewport.width)
-      c.height = Math.round(viewport.height)
-      const ctx = c.getContext('2d')!
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, c.width, c.height)
+      const { c, ctx } = whiteCanvas(Math.round(viewport.width), Math.round(viewport.height))
       await page.render({ canvas: c, canvasContext: ctx, viewport }).promise
+      page.cleanup()
       pages.push(c)
     }
     // Páginas apiladas en una hoja continua, dentro del tope de píxeles.
@@ -97,24 +141,27 @@ async function pdfToScan(file: File): Promise<ScanResult> {
     const rawH = pages.reduce((n, p) => n + Math.round((p.height * width) / p.width), 0)
     const { w, h } = fitSize(width, rawH)
     const k = w / width
-    const out = document.createElement('canvas')
-    out.width = w
-    out.height = h
-    const ctx = out.getContext('2d')!
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, w, h)
+    const { c: out, ctx } = whiteCanvas(w, h)
     let y = 0
     for (const p of pages) {
       const ph = (p.height * width) / p.width
       ctx.drawImage(p, 0, y * k, w, ph * k)
       y += ph
+      p.width = p.height = 0 // libera memoria en Safari
     }
-    return { blob: await canvasToJpeg(out), width: w, height: h, pages: { total, used }, title: titleFrom(file) }
+    return { blob: await canvasToJpeg(out), width: w, height: h, canvas: out, pages: { total, used }, title: titleFrom(file) }
   } finally {
     void task.destroy()
   }
 }
 
-export function fileToScan(file: File): Promise<ScanResult> {
-  return isPdf(file) ? pdfToScan(file) : imageToScan(file)
+export async function fileToScan(file: File): Promise<ScanResult> {
+  try {
+    return await (isPdf(file) ? pdfToScan(file) : imageToScan(file))
+  } catch (e) {
+    // Mensajes siempre comprensibles (nada de errores técnicos del navegador).
+    if (e instanceof Error && /^(No |Ese |El iPad)/.test(e.message)) throw e
+    console.error('[MILA] importación', e)
+    throw new Error('No pude procesar ese archivo. Prueba con una foto JPG/PNG o con un PDF.')
+  }
 }

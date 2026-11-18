@@ -24,6 +24,7 @@ function layout(measureW = 200, perRow = 2, rows = 2): Layout {
       l.measures.push({
         index: r * perRow + c,
         row: r,
+        col: c,
         x: 22 + c * measureW,
         w: measureW,
         yTop,

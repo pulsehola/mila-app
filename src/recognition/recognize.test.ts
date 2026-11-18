@@ -123,3 +123,38 @@ describe('gestos', () => {
     expect(groups[0]).toHaveLength(2)
   })
 })
+
+describe('compás completo escrito a mano: barras y alteraciones', () => {
+  it('una barra de compás dibujada a mano se acepta (no da error)', () => {
+    const r = recognizeCluster([line(300, 98, 300, 142)], staff)
+    expect(r.kind).toBe('barline')
+  })
+
+  it('♯ escrito delante de la cabeza se aplica a la nota', () => {
+    const y = yFromStep(4, staff) // Sol4
+    const sharp = [line(180, y - 14, 180, y + 12), line(188, y - 16, 188, y + 10), line(175, y - 5, 193, y - 9), line(175, y + 4, 193, y)]
+    const r = recognizeCluster([...sharp, scribbleFill(205, y, 6, 4), line(211, y, 211, y - 32)], staff)
+    expect(r).toMatchObject({ kind: 'note', dur: 'q', step: 4, acc: '#' })
+  })
+
+  it('♭ suelto (un trazo con bucle abajo) se reconoce como alteración', () => {
+    const y = 120
+    const flat = poly([[200, y - 22], [200, y + 6], [204, y + 2], [209, y - 2], [210, y + 3], [206, y + 7], [200, y + 6]], 6)
+    const r = recognizeCluster([flat], staff)
+    expect(r).toMatchObject({ kind: 'accidental', acc: 'b' })
+  })
+
+  it('♮ suelto (dos trazos en L) se reconoce como alteración', () => {
+    const y = 120
+    const nat = [poly([[200, y - 18], [200, y + 4], [209, y + 1]], 8), poly([[209, y + 18], [209, y - 4], [200, y - 1]], 8)]
+    const r = recognizeCluster(nat, staff)
+    expect(r).toMatchObject({ kind: 'accidental', acc: 'n' })
+  })
+
+  it('una negra normal sigue reconociéndose igual (sin alteración)', () => {
+    const y = yFromStep(6, staff)
+    const r = recognizeCluster([scribbleFill(205, y, 6, 4), line(211, y, 211, y - 32)], staff)
+    expect(r).toMatchObject({ kind: 'note', dur: 'q', step: 6 })
+    expect((r as { acc?: string }).acc ?? '').toBe('')
+  })
+})

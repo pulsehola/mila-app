@@ -144,7 +144,7 @@ async function renderAsSeen(score: Score, scale: number): Promise<AsSeen> {
   const bg = score.background!
   const host = offscreenHost()
   try {
-    const layout = renderScore(host, score.measures, { width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH })
+    const layout = renderScore(host, score.measures, { width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH, rowWidths: bg.rowWidths })
     const dw = bg.layoutWidth * bg.scale
     const dh = dw * (bg.naturalH / bg.naturalW)
     const height = Math.ceil(Math.max(layout.height, bg.y + dh + 24))

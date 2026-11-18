@@ -79,7 +79,12 @@ export function HelpModal({ open, onClose }: { open: boolean; onClose: () => voi
           <li>Escribe con el Apple Pencil; apoya la mano con tranquilidad: los dedos no dibujan. Dos dedos hacen scroll.</li>
           <li>La nota se coloca por la altura de la cabeza: líneas y espacios de la clave de Sol.</li>
           <li>Tras escribir, la nota queda seleccionada: usa ♯ ♭ ♮, staccato, acento o ligadura en la paleta izquierda.</li>
-          <li>Escribe a tu ritmo: cabeza, plica y corchete se agrupan solos. La nota aparece tras ~0,6 s sin tocar la pantalla.</li>
+          <li>
+            Escribe el <b>compás entero</b> a tu ritmo (cabezas, plicas, corchetes, ♯ ♭ ♮ delante de la nota y la barra
+            de compás). Se convierte tras ~0,8 s sin tocar la pantalla, o con el botón <b>Convertir</b> / Intro. Con
+            «Con botón» solo se convierte cuando tú lo pidas. Lo que no sea música (textos, flechas) queda como anotación.
+          </li>
+          <li>Zoom: pellizca con dos dedos (o el trackpad del Mac, o ⌘+ / ⌘−); dos dedos también desplazan la hoja.</li>
           <li>
             Modo <b>Anotar</b> (abajo a la izquierda): textos como “ENTRA DIRECTO”, flechas o recuadros se guardan tal cual, en
             azul, pegados a su compás. Tacha en zig-zag por encima para borrarlos. También salen en el PDF y la imagen.
@@ -95,8 +100,9 @@ export function HelpModal({ open, onClose }: { open: boolean; onClose: () => voi
           </li>
           <li>
             <b>Escanear</b> (en Mis partituras o en una hoja vacía): haz una foto o sube un PDF de tu partitura de papel.
-            Queda de fondo; con <b>Fondo</b> ajusta tamaño, giro y separación entre pentagramas hasta que las líneas
-            coincidan, y escribe, anota o borra encima. Al exportar sale tal cual se ve.
+            MILA la endereza, <b>lee sus notas y compases</b> y los convierte en notas editables alineadas encima del papel
+            (es un borrador: revisa y corrige). Con <b>Fondo</b> puedes reajustar o «Detectar notas» otra vez. Al
+            exportar sale tal cual se ve.
           </li>
           <li>El punto junto a cada compás avisa si faltan o sobran tiempos (4/4).</li>
           <li>

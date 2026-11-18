@@ -23,6 +23,11 @@ export function normalizeBackground(raw: unknown): Background | undefined {
     layoutWidth: clampNum(b.layoutWidth, 320, 2400, 900),
     rowH: clampNum(b.rowH, 90, 320, 160),
     perRow: Math.round(clampNum(b.perRow, 1, 6, 4)),
+    ...(Array.isArray(b.rowWidths) &&
+    b.rowWidths.length <= 64 &&
+    b.rowWidths.every((r) => Array.isArray(r) && r.length >= 1 && r.length <= 12 && r.every((v) => typeof v === 'number' && v > 0 && v < 3000))
+      ? { rowWidths: b.rowWidths }
+      : {}),
     x: clampNum(b.x, -4000, 4000, 0),
     y: clampNum(b.y, -4000, 8000, 0),
     scale: clampNum(b.scale, 0.2, 4, 1),

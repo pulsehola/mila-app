@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Check, Move, RotateCcw, Sparkles, Trash2, X } from 'lucide-react'
+import { Check, Loader2, Move, RotateCcw, Sparkles, Trash2, Wand2, X } from 'lucide-react'
 import type { Background } from '../types'
 import { ELASTIC } from './springs'
 
@@ -11,6 +11,9 @@ interface Props {
   onChange: (bg: Background, record?: boolean) => void
   onRemove: () => void
   onClose: () => void
+  /** Leer las notas del papel (OMR) y convertirlas en notas editables. */
+  onDetect: () => void
+  detecting: boolean
 }
 
 function Slider({
@@ -57,7 +60,7 @@ function Slider({
  * Ajustes de la partitura escaneada: transparencia, tamaño, giro, y el espaciado de la hoja digital
  * (separación entre sistemas y compases por línea) para que el pentagrama coincida con el papel.
  */
-export function BackgroundPanel({ bg, adjust, onAdjust, onChange, onRemove, onClose }: Props) {
+export function BackgroundPanel({ bg, adjust, onAdjust, onChange, onRemove, onClose, onDetect, detecting }: Props) {
   const set = (patch: Partial<Background>) => onChange({ ...bg, ...patch })
   const mark = () => onChange(bg, true)
 
@@ -76,6 +79,18 @@ export function BackgroundPanel({ bg, adjust, onAdjust, onChange, onRemove, onCl
           <X size={18} />
         </button>
       </div>
+
+      <motion.button
+        type="button"
+        disabled={detecting}
+        onClick={onDetect}
+        whileTap={{ scale: 0.95 }}
+        transition={ELASTIC}
+        className="mb-2 flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-mi text-sm font-extrabold text-white disabled:opacity-60"
+      >
+        {detecting ? <Loader2 size={17} className="animate-spin" /> : <Wand2 size={17} />}
+        {detecting ? 'Leyendo el papel…' : 'Detectar notas del papel'}
+      </motion.button>
 
       <motion.button
         type="button"
@@ -101,10 +116,14 @@ export function BackgroundPanel({ bg, adjust, onAdjust, onChange, onRemove, onCl
               <button
                 key={n}
                 type="button"
-                aria-pressed={bg.perRow === n}
-                onClick={() => onChange({ ...bg, perRow: n }, true)}
+                aria-pressed={!bg.rowWidths && bg.perRow === n}
+                onClick={() => onChange({ ...bg, perRow: n, rowWidths: undefined }, true)}
                 className="h-9 flex-1 rounded-xl text-sm font-extrabold"
-                style={{ background: bg.perRow === n ? 'var(--mi)' : 'var(--paper)', color: bg.perRow === n ? '#fff' : 'var(--ink)', border: '1px solid var(--line)' }}
+                style={{
+                  background: !bg.rowWidths && bg.perRow === n ? 'var(--mi)' : 'var(--paper)',
+                  color: !bg.rowWidths && bg.perRow === n ? '#fff' : 'var(--ink)',
+                  border: '1px solid var(--line)',
+                }}
               >
                 {n}
               </button>

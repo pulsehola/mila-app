@@ -33,6 +33,8 @@ export interface NoteHit {
 export interface MeasureBox {
   index: number
   row: number
+  /** Posición dentro del sistema (0 = primer compás, con clave). */
+  col: number
   x: number
   w: number
   yTop: number
@@ -62,6 +64,11 @@ export interface RenderOptions {
   timeSig?: boolean
   /** Separación entre sistemas (px); por defecto ROW_H. Con fondo escaneado se ajusta al papel. */
   rowH?: number
+  /**
+   * Anchos de compás por sistema (px), copiados de la partitura escaneada para que cada compás digital caiga
+   * encima del de papel. Los sistemas que no estén aquí usan `perRow` compases iguales.
+   */
+  rowWidths?: number[][]
 }
 
 export function computePerRow(width: number): number {
@@ -78,7 +85,17 @@ export function renderScore(container: HTMLElement, measures: Measure[], opts: R
   const inner = width - SIDE_PAD * 2
   const extras = CLEF_W + (showTime ? TIME_W : 0)
   const baseW = (inner - extras) / perRow
-  const rowCount = Math.max(1, Math.ceil(measures.length / perRow))
+  // Reparto de compases en sistemas (con anchos del papel si los hay).
+  const rowsSpec: number[][] = []
+  for (let i = 0, r = 0; i < measures.length || r === 0; r++) {
+    const given = opts.rowWidths?.[r]?.filter((v) => v > 20)
+    const count = Math.max(1, given?.length || perRow)
+    const n = Math.max(1, Math.min(count, measures.length - i))
+    rowsSpec.push(given?.length ? given.slice(0, n) : Array.from({ length: n }, (_, c) => baseW + (c === 0 ? extras : 0)))
+    i += n
+    if (rowsSpec.length > 200) break
+  }
+  const rowCount = rowsSpec.length
   const rowH = opts.rowH ?? ROW_H
   const height = TOP_PAD + rowCount * rowH + 24
 
@@ -88,17 +105,17 @@ export function renderScore(container: HTMLElement, measures: Measure[], opts: R
 
   const layout: Layout = { width, height, perRow, rows: [], measures: [], notes: [] }
 
+  let mi = -1
   for (let row = 0; row < rowCount; row++) {
     let x = SIDE_PAD
     const y = TOP_PAD - 40 + row * rowH // la línea superior queda 40 px por debajo
     let rowTop = 0
     let rowBottom = 0
-    for (let c = 0; c < perRow; c++) {
-      const mi = row * perRow + c
+    for (let c = 0; c < rowsSpec[row].length; c++) {
+      mi++
       if (mi >= measures.length) break
       const first = c === 0
-      const extra = first ? extras : 0
-      const w = baseW + extra
+      const w = rowsSpec[row][c]
       const stave = new Stave(x, y, w)
       if (first) stave.addClef('treble')
       if (first && row === 0 && showTime) stave.addTimeSignature('4/4')
@@ -110,6 +127,7 @@ export function renderScore(container: HTMLElement, measures: Measure[], opts: R
       const box: MeasureBox = {
         index: mi,
         row,
+        col: c,
         x,
         w,
         yTop: rowTop,

@@ -7,6 +7,7 @@ import {
   clusterStrokes,
   isScratchOut,
   recognizeCluster,
+  splitByHeads,
   STAFF_GAP,
 } from '../recognition/recognize'
 import {
@@ -33,12 +34,12 @@ import {
 } from '../notation/annotations'
 import { drawStroke } from './ink'
 import { ELASTIC } from './springs'
-import { Camera } from 'lucide-react'
+import { Camera, Check } from 'lucide-react'
 
 /** Pausa natural del lápiz antes de reconocer: permite encadenar cabeza + plica + corchete sin cortes. */
-const RECOGNIZE_DELAY = 600
+const RECOGNIZE_DELAY = 800
 /** Si el Pencil sigue flotando sobre la pantalla se espera algo más, pero nunca más de esto. */
-const MAX_WAIT = 1600
+const MAX_WAIT = 2200
 /** Radio de la goma (px). */
 const ERASE_R = 16
 const DRAG_THRESHOLD = 7
@@ -69,7 +70,16 @@ interface Props {
   onBackground: (bg: Background, record?: boolean) => void
   /** Abre el escaneo/importación (botón de la hoja vacía). */
   onScan: () => void
+  /** true: convierte tras la pausa; false: solo con el botón Convertir. */
+  autoConvert: boolean
+  /** Zoom de Mila (pellizco): 1 = hoja ajustada al ancho. */
+  userZoom: number
+  onUserZoom: (z: number) => void
 }
+
+export const MIN_ZOOM = 0.5
+export const MAX_ZOOM = 3
+const clampZoom = (z: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z))
 
 interface Active {
   pointerId: number
@@ -118,7 +128,8 @@ export function ScoreCanvas(p: Props) {
   // para caber en pantalla: así no se desalinea al girar el iPad.
   const bg = p.background
   const renderW = bg ? bg.layoutWidth : width
-  const zoom = bg ? width / bg.layoutWidth : 1
+  // Zoom total = ajuste al ancho (con fondo escaneado) × zoom de Mila (pellizco).
+  const zoom = (bg ? width / bg.layoutWidth : 1) * p.userZoom
   const zoomRef = useRef(zoom)
   zoomRef.current = zoom
   const bgDisplayH = bg ? bg.layoutWidth * bg.scale * (bg.naturalH / bg.naturalW) : 0
@@ -131,7 +142,11 @@ export function ScoreCanvas(p: Props) {
   useLayoutEffect(() => {
     const host = hostRef.current
     if (!host) return
-    const l = renderScore(host, p.measures, bg ? { width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH } : { width })
+    const l = renderScore(
+      host,
+      p.measures,
+      bg ? { width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH, rowWidths: bg.rowWidths } : { width },
+    )
     layoutRef.current = l
     if (import.meta.env.DEV) (window as unknown as { __milaLayout?: Layout }).__milaLayout = l
     setLayout(l)
@@ -156,7 +171,7 @@ export function ScoreCanvas(p: Props) {
       })
       if (fresh.length) setBursts((b) => [...b, ...fresh])
     }
-  }, [p.measures, width, bg?.layoutWidth, bg?.perRow, bg?.rowH])
+  }, [p.measures, width, bg?.layoutWidth, bg?.perRow, bg?.rowH, bg?.rowWidths])
 
   // ---- Canvas de tinta ----------------------------------------------------
   const pendingRef = useRef<{ stroke: Stroke; pen: boolean }[]>([])
@@ -282,15 +297,32 @@ export function ScoreCanvas(p: Props) {
     return bestD <= 95 ? best : -1
   }
 
+  /** Caja de la tinta pendiente de convertir (para el botón "Convertir"). */
+  const [pendingBox, setPendingBox] = useState<{ x: number; y: number } | null>(null)
+  const updatePendingBox = useCallback(() => {
+    const all = pendingRef.current.flatMap((p) => p.stroke)
+    if (!all.length) return setPendingBox(null)
+    const b = bbox(all)
+    setPendingBox({ x: b.x1, y: b.y0 })
+  }, [])
+
+  /**
+   * Convierte TODA la tinta pendiente (el compás entero que Mila haya escrito) de una vez:
+   * notas y silencios → partitura; barras de compás → se aceptan; alteraciones sueltas → a su nota;
+   * lo que claramente no es música (texto, flechas, fuera del pentagrama) → se conserva como anotación.
+   */
   const flush = useCallback(() => {
     window.clearTimeout(timerRef.current)
     const l = layoutRef.current
-    const strokes = pendingRef.current.map((s) => s.stroke)
+    const pending = pendingRef.current
+    const strokes = pending.map((s) => s.stroke)
+    const penUsed = pending.some((s) => s.pen)
     if (strokes.length > 0) {
       const all = bbox(strokes.flat())
       ghostInk(all.cx, all.cy)
     }
     pendingRef.current = []
+    setPendingBox(null)
     redrawInk()
     if (!l || strokes.length === 0) return
     const cur = propsRef.current
@@ -299,19 +331,45 @@ export function ScoreCanvas(p: Props) {
       measure: number
       x: number
       note: Note
+      row: number
     }
     const inserts: Ins[] = []
+    const looseAcc: { acc: Exclude<Note['acc'], ''>; x: number; row: number }[] = []
+    const toAnnotate: Stroke[][] = []
     let unknown = 0
-    for (const group of clusterStrokes(strokes)) {
+    // Lo que queda claramente por encima/debajo del pentagrama (texto, flechas) se agrupa aparte para que
+    // nunca se mezcle con las plicas; lo de dentro se separa en una nota por cabeza.
+    const outside = (st: Stroke) => {
+      const b = bbox(st)
+      const row = rowFor(b.cy, l)
+      if (row < 0) return true
+      return b.y1 < l.rows[row].yTop - 15 || b.y0 > l.rows[row].yBottom + 15
+    }
+    const groups = [
+      ...clusterStrokes(strokes.filter((st) => !outside(st))).flatMap(splitByHeads),
+      ...clusterStrokes(strokes.filter(outside)),
+    ]
+    for (const group of groups) {
       const box = bbox(group.flat())
       const row = rowFor(box.cy, l)
+      // Lejos de cualquier pentagrama: es una anotación (texto, flecha, marca de ensayo...).
       if (row < 0) {
-        unknown++
+        toAnnotate.push(group)
         continue
       }
-      const rec = recognizeCluster(group, l.rows[row])
+      const staff = l.rows[row]
+      const rec = recognizeCluster(group, staff)
+      if (rec.kind === 'barline') continue
+      if (rec.kind === 'accidental') {
+        looseAcc.push({ acc: rec.acc, x: rec.x, row })
+        continue
+      }
       if (rec.kind === 'unknown') {
-        unknown++
+        // Por encima/debajo del pentagrama o con forma de texto (ancho, varios trazos): anotación.
+        const outside = box.y1 < staff.yTop - STAFF_GAP * 1.5 || box.y0 > staff.yBottom + STAFF_GAP * 1.5
+        const textLike = group.length >= 3 && box.w > 60
+        if (outside || textLike) toAnnotate.push(group)
+        else unknown++
         continue
       }
       const mbox = l.measures.find((m) => m.row === row && rec.x >= m.x && rec.x < m.x + m.w)
@@ -320,11 +378,29 @@ export function ScoreCanvas(p: Props) {
         continue
       }
       const note =
-        rec.kind === 'rest' ? makeRest(rec.dur) : makeNote({ dur: rec.dur, step: rec.step })
-      inserts.push({ measure: mbox.index, x: rec.x, note })
+        rec.kind === 'rest' ? makeRest(rec.dur) : makeNote({ dur: rec.dur, step: rec.step, acc: rec.acc ?? '' })
+      inserts.push({ measure: mbox.index, x: rec.x, note, row })
     }
 
-    if (inserts.length > 0) {
+    // Alteraciones sueltas: a la nota más cercana a su derecha (nueva o ya escrita).
+    const accOnExisting = new Map<string, Exclude<Note['acc'], ''>>()
+    for (const a of looseAcc) {
+      const fresh = inserts
+        .filter((i) => i.row === a.row && i.x > a.x && i.x - a.x < 45 && i.note.kind === 'note')
+        .sort((p, q) => p.x - q.x)[0]
+      if (fresh) {
+        fresh.note = { ...fresh.note, acc: a.acc }
+        continue
+      }
+      const rowMeasures = new Set(l.measures.filter((m) => m.row === a.row).map((m) => m.index))
+      const hit = l.notes
+        .filter((n) => rowMeasures.has(n.measure) && n.kind === 'note' && n.x > a.x && n.x - a.x < 45)
+        .sort((p, q) => p.x - q.x)[0]
+      if (hit) accOnExisting.set(hit.id, a.acc)
+      else unknown++
+    }
+
+    if (inserts.length > 0 || accOnExisting.size > 0) {
       const xs = new Map<number, number[]>()
       const xsFor = (mi: number) => {
         if (!xs.has(mi)) xs.set(mi, l.notes.filter((n) => n.measure === mi).sort((a, b) => a.index - b.index).map((n) => n.x))
@@ -332,8 +408,8 @@ export function ScoreCanvas(p: Props) {
       }
       cur.onEdit()
       cur.setMeasures((ms) => {
-        const next = ms.map((m) => m.slice())
-        for (const ins of inserts) {
+        const next = ms.map((m) => (m.some((n) => accOnExisting.has(n.id)) ? m.map((n) => (accOnExisting.has(n.id) ? { ...n, acc: accOnExisting.get(n.id)! } : n)) : m.slice()))
+        for (const ins of [...inserts].sort((p, q) => p.x - q.x)) {
           const arr = xsFor(ins.measure)
           const idx = arr.filter((x) => x < ins.x).length
           next[ins.measure].splice(idx, 0, ins.note)
@@ -341,33 +417,62 @@ export function ScoreCanvas(p: Props) {
         }
         return next
       })
-      const last = inserts[inserts.length - 1].note
-      popRef.current = inserts.map((i) => i.note.id)
-      cur.onSelect(last.id)
-      if (last.kind === 'note') {
-        void engine.preview(soundingMidi(writtenMidi(last.step, ''), cur.transposition), 260)
+      if (inserts.length) {
+        const last = inserts[inserts.length - 1].note
+        popRef.current = inserts.map((i) => i.note.id)
+        cur.onSelect(last.id)
+        if (last.kind === 'note') void engine.preview(soundingMidi(writtenMidi(last.step, last.acc), cur.transposition), 260)
+      } else {
+        popRef.current = [...accOnExisting.keys()]
+      }
+    }
+
+    // La tinta que no es música se conserva tal cual, como anotación (nunca se pierde ni se confunde).
+    if (toAnnotate.length) {
+      const created = toAnnotate
+        .map((g) => {
+          let a = createAnnotation(newId(), g[0], penUsed, l)
+          for (const st of g.slice(1)) if (a) a = appendStroke(a, st, l)
+          return a
+        })
+        .filter((a): a is Annotation => !!a)
+      if (created.length) {
+        cur.setAnnotations((list) => [...list, ...created])
+        cur.onToast('Lo guardé como anotación (⌘Z si era una nota)')
       }
     }
     if (unknown > 0) cur.onToast('No lo reconocí. Prueba un círculo, o círculo + plica.', 'warn')
   }, [redrawInk, ghostInk])
 
   /**
-   * Debounce inteligente: el reloj arranca al levantar el lápiz y se reinicia al volver a apoyarlo. Si el Pencil
-   * sigue flotando (iPad con hover) se concede algo más de margen, con un tope para no hacer esperar.
+   * Pausa natural: el reloj arranca al levantar el lápiz y se reinicia al volver a apoyarlo, así Mila puede
+   * escribir el compás entero sin cortes. Si el Pencil sigue flotando se espera algo más (con tope).
+   * Con "convertir con botón" no hay reloj: solo el botón Convertir (o Intro) convierte.
    */
   const idleSince = useRef(0)
   const queueFlush = useCallback(
     (hover = false) => {
+      updatePendingBox()
+      window.clearTimeout(timerRef.current)
+      if (!propsRef.current.autoConvert) return
       const now = performance.now()
       if (!hover) idleSince.current = now
       const wait = hover
         ? Math.min(RECOGNIZE_DELAY, Math.max(0, MAX_WAIT - (now - idleSince.current)))
         : RECOGNIZE_DELAY
-      window.clearTimeout(timerRef.current)
       timerRef.current = window.setTimeout(flush, wait)
     },
-    [flush],
+    [flush, updatePendingBox],
   )
+
+  // "Convertir" desde fuera (tecla Intro).
+  useEffect(() => {
+    const go = () => {
+      if (pendingRef.current.length) flush()
+    }
+    window.addEventListener('mila:convert', go)
+    return () => window.removeEventListener('mila:convert', go)
+  }, [flush])
 
   useEffect(() => () => window.clearTimeout(timerRef.current), [])
 
@@ -423,7 +528,50 @@ export function ScoreCanvas(p: Props) {
   // ---- Punteros -----------------------------------------------------------
   const touches = useRef(new Map<number, { x: number; y: number; big: boolean }>())
   const lastPenAt = useRef(0)
-  const scrollGesture = useRef<{ cx: number; cy: number } | null>(null)
+  const scrollGesture = useRef<{ cx: number; cy: number; d: number; z: number } | null>(null)
+  /** Punto que debe quedarse bajo los dedos/cursor al hacer zoom (fracción del contenido + posición en pantalla). */
+  const zoomAnchor = useRef<{ fx: number; fy: number; vx: number; vy: number } | null>(null)
+
+  /** Zoom alrededor de un punto de la pantalla (los dedos o el cursor), sin que la hoja "salte". */
+  const zoomAround = useCallback((nextZoom: number, clientX: number, clientY: number) => {
+    const el = scrollRef.current
+    if (!el) return
+    const z = clampZoom(nextZoom)
+    if (Math.abs(z - propsRef.current.userZoom) < 0.005) return
+    const r = el.getBoundingClientRect()
+    const vx = clientX - r.left
+    const vy = clientY - r.top
+    zoomAnchor.current = {
+      fx: (el.scrollLeft + vx) / Math.max(1, el.scrollWidth),
+      fy: (el.scrollTop + vy) / Math.max(1, el.scrollHeight),
+      vx,
+      vy,
+    }
+    propsRef.current.onUserZoom(Math.round(z * 100) / 100)
+  }, [])
+
+  // Tras cambiar el zoom, recolocar el scroll para mantener el punto bajo los dedos.
+  useLayoutEffect(() => {
+    const a = zoomAnchor.current
+    const el = scrollRef.current
+    if (!a || !el) return
+    zoomAnchor.current = null
+    el.scrollLeft = a.fx * el.scrollWidth - a.vx
+    el.scrollTop = a.fy * el.scrollHeight - a.vy
+  }, [zoom])
+
+  // Mac: pellizco del trackpad (llega como rueda con Ctrl).
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      zoomAround(propsRef.current.userZoom * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [zoomAround])
 
   const local = (e: { clientX: number; clientY: number }) => {
     const r = captureRef.current!.getBoundingClientRect()
@@ -474,7 +622,12 @@ export function ScoreCanvas(p: Props) {
       if (touches.current.size === 2 && !penRecent) {
         const pts = [...touches.current.values()]
         if (!pts.some((t) => t.big)) {
-          scrollGesture.current = { cx: (pts[0].x + pts[1].x) / 2, cy: (pts[0].y + pts[1].y) / 2 }
+          scrollGesture.current = {
+            cx: (pts[0].x + pts[1].x) / 2,
+            cy: (pts[0].y + pts[1].y) / 2,
+            d: Math.max(20, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)),
+            z: cur.userZoom,
+          }
         }
       }
       return
@@ -614,11 +767,15 @@ export function ScoreCanvas(p: Props) {
       const g = scrollGesture.current
       const penRecent = performance.now() - lastPenAt.current < 900 || activeRef.current?.pen
       if (g && touches.current.size === 2 && !penRecent) {
+        // Dos dedos: desplazar (y pellizcar para hacer zoom). El lápiz nunca hace esto.
         const pts = [...touches.current.values()]
         const cx = (pts[0].x + pts[1].x) / 2
         const cy = (pts[0].y + pts[1].y) / 2
+        const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
         scrollRef.current?.scrollBy({ left: g.cx - cx, top: g.cy - cy })
-        scrollGesture.current = { cx, cy }
+        const ratio = d / g.d
+        if (Math.abs(ratio - 1) > 0.04) zoomAround(g.z * ratio, cx, cy)
+        scrollGesture.current = { ...g, cx, cy }
       }
       return
     }
@@ -846,7 +1003,7 @@ export function ScoreCanvas(p: Props) {
               onClick={() => p.onBadge(m.index)}
               className="absolute z-20 grid place-items-center rounded-full text-[11px] font-bold"
               style={{
-                left: m.x + (m.index % layout.perRow === 0 ? 8 : 6),
+                left: m.x + (m.col === 0 ? 8 : 6),
                 top: m.yTop - 44,
                 width: p.loopMode ? 30 : 22,
                 height: p.loopMode ? 30 : 22,
@@ -933,6 +1090,27 @@ export function ScoreCanvas(p: Props) {
                 <Camera size={18} /> o escanea / importa tu partitura de papel
               </motion.button>
             </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Botón "Convertir" junto a la tinta pendiente */}
+        <AnimatePresence>
+          {pendingBox && p.mode === 'notes' && (
+            <motion.button
+              key="convert"
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => flush()}
+              initial={{ opacity: 0, scale: 0.6 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.6 }}
+              whileTap={{ scale: 0.9 }}
+              transition={ELASTIC}
+              className="absolute z-20 flex h-9 items-center gap-1 rounded-full bg-mi px-3 text-xs font-extrabold text-white shadow-lg"
+              style={{ left: pendingBox.x + 8, top: Math.max(4, pendingBox.y - 40) }}
+            >
+              <Check size={15} strokeWidth={3} /> Convertir
+            </motion.button>
           )}
         </AnimatePresence>
 

@@ -1,4 +1,4 @@
-import type { Duration, Stroke } from '../types'
+import type { Accidental, Duration, Stroke } from '../types'
 import {
   type BBox,
   bbox,
@@ -22,8 +22,12 @@ export interface StaffCtx {
 export const STAFF_GAP = 10
 
 export type Recognized =
-  | { kind: 'note'; dur: Duration; step: number; x: number; y: number; reason: string }
+  | { kind: 'note'; dur: Duration; step: number; x: number; y: number; acc?: Accidental; reason: string }
   | { kind: 'rest'; dur: Duration; x: number; y: number; reason: string }
+  /** Barra de compás dibujada a mano: se acepta sin hacer nada (los compases ya existen). */
+  | { kind: 'barline'; x: number; reason: string }
+  /** Alteración suelta (♯ ♭ ♮): se aplica a la nota que tenga a su derecha. */
+  | { kind: 'accidental'; acc: Exclude<Accidental, ''>; x: number; y: number; reason: string }
   | { kind: 'unknown'; reason: string }
 
 /** Paso diatónico (Do4 = 0) para una coordenada y. La línea inferior es Mi4 (paso 2). */
@@ -87,15 +91,95 @@ function isHeadLike(f: Feat): boolean {
   return f.straight < 0.7 || f.len < 9
 }
 
+/**
+ * Al escribir un compás entero los trazos quedan muy juntos y el agrupado por cercanía puede unir varias
+ * notas. Aquí se separa: una cabeza = una nota; cada trazo restante (plica, corchete, alteración) va con la
+ * cabeza más cercana en horizontal.
+ */
+export function splitByHeads(strokes: Stroke[]): Stroke[][] {
+  if (strokes.length < 3) return [strokes]
+  const feats = strokes.map(feat)
+  const heads = feats.filter(isHeadLike)
+  // Cabezas que se solapan (garabato de relleno en varios trazos) cuentan como una.
+  const groups: { box: BBox; members: Feat[] }[] = []
+  for (const hd of heads) {
+    const g = groups.find((gg) => boxesNear(gg.box, hd.box, 3))
+    if (g) {
+      g.members.push(hd)
+      g.box = unionBox([g.box, hd.box])
+    } else groups.push({ box: hd.box, members: [hd] })
+  }
+  if (groups.length <= 1) return [strokes]
+  const hDist = (b: BBox, g: BBox) => Math.max(0, g.x0 - b.x1, b.x0 - g.x1)
+  for (const f of feats) {
+    if (heads.includes(f)) continue
+    let best = groups[0]
+    let bestD = Infinity
+    for (const g of groups) {
+      const d = hDist(f.box, g.box) * 4 + Math.abs(f.box.cx - g.box.cx) * 0.01 + Math.abs(f.box.cy - g.box.cy) * 0.05
+      if (d < bestD) {
+        bestD = d
+        best = g
+      }
+    }
+    best.members.push(f)
+  }
+  return groups.sort((a, b) => a.box.cx - b.box.cx).map((g) => g.members.map((m) => m.s))
+}
+
+/**
+ * Alteraciones escritas a mano:
+ *  ♯ = dos trazos verticales + al menos uno horizontal/inclinado;  ♭ = trazo alto que se cierra en un bucle abajo;
+ *  ♮ = trazos alto(s) con esquinas (forma de "L" + "L" invertida o un trazo en zig-zag de 2+ esquinas).
+ */
+export function recognizeAccidental(strokes: Stroke[]): Exclude<Accidental, ''> | null {
+  if (!strokes.length || strokes.length > 5) return null
+  const feats = strokes.map(feat)
+  const box = unionBox(feats.map((f) => f.box))
+  if (box.h < 12 || box.h > 50 || box.w > 32 || box.w < 3) return null
+  const vertical = feats.filter((f) => f.box.h >= 1.8 * Math.max(f.box.w, 1) && f.straight >= 0.85 && f.box.h >= 0.5 * box.h)
+  const horizontal = feats.filter((f) => f.box.w >= 1.2 * Math.max(f.box.h, 1) && f.straight >= 0.8)
+  if (feats.length >= 3 && vertical.length >= 2 && horizontal.length >= 1) return '#'
+  // ♭: un trazo (o plica + curva) con bucle en la mitad inferior.
+  for (const f of feats) {
+    const loop = findLoop(f.s)
+    if (loop && f.box.h >= 1.4 * f.box.w && loop.box.cy > f.box.y0 + f.box.h * 0.5) return 'b'
+  }
+  if (feats.length === 2 && vertical.length === 1) {
+    const other = feats.find((f) => f !== vertical[0])!
+    if (other.straight < 0.8 && other.box.cy > vertical[0].box.cy && other.box.cx >= vertical[0].box.cx) return 'b'
+  }
+  // ♮: esquinas, alto y estrecho, sin bucle.
+  const cornersTotal = feats.reduce((n, f) => n + corners(f.s, 60), 0)
+  if (feats.length <= 2 && cornersTotal >= 2 && box.h >= 1.5 * box.w && !feats.some((f) => findLoop(f.s))) return 'n'
+  return null
+}
+
 export function recognizeCluster(strokes: Stroke[], staff: StaffCtx): Recognized {
   if (strokes.length === 0) return { kind: 'unknown', reason: 'vacío' }
   const feats = strokes.map(feat)
   const all = unionBox(feats.map((f) => f.box))
 
+  // 0) Barra de compás: un trazo recto y vertical que cruza casi todo el pentagrama.
+  if (feats.length === 1) {
+    const f = feats[0]
+    const span = staff.yBottom - staff.yTop
+    if (f.straight >= 0.9 && f.box.w <= 10 && f.box.h >= span * 0.8 && f.box.y0 <= staff.yTop + span * 0.25 && f.box.y1 >= staff.yBottom - span * 0.25) {
+      return { kind: 'barline', x: f.box.cx, reason: 'trazo vertical que cruza el pentagrama' }
+    }
+  }
+
   // 1) Un solo trazo "paleta": círculo + plica continuada (blanca / negra dibujada de una vez).
   if (feats.length === 1) {
     const f = feats[0]
     const loop = findLoop(f.s)
+    // ♭: el palo sube por la IZQUIERDA de un bucle que queda abajo (una blanca con plica arriba la lleva a la derecha).
+    if (loop && loop.box.cy > f.box.y0 + f.box.h * 0.5) {
+      const top = f.s.reduce((a, b) => (b.y < a.y ? b : a))
+      if (top.x <= loop.box.cx - loop.box.w * 0.2 && f.box.w <= 22) {
+        return { kind: 'accidental', acc: 'b', x: f.box.cx, y: f.box.cy, reason: 'palo a la izquierda + bucle abajo (♭)' }
+      }
+    }
     if (loop && f.box.h / Math.max(f.box.w, 1) >= 1.5 && f.box.h >= 24 && f.box.w <= 30) {
       const cy = loop.box.cy
       return {
@@ -129,7 +213,12 @@ export function recognizeCluster(strokes: Stroke[], staff: StaffCtx): Recognized
     const tiny = merged.w < 10 && merged.h < 10
     const isFilled = tiny || ratio >= 2.3 || extraHeads.length > 0
 
-    const others = feats.filter((f) => f !== headFeat && !extraHeads.includes(f))
+    let others = feats.filter((f) => f !== headFeat && !extraHeads.includes(f))
+    // Alteración escrita a la izquierda de la cabeza (sin tocarla).
+    const leftStrokes = others.filter((f) => f.box.x1 < merged.x0 - 2 && f.box.cy > merged.cy - 30 && f.box.cy < merged.cy + 30)
+    const acc = leftStrokes.length ? recognizeAccidental(leftStrokes.map((f) => f.s)) : null
+    if (acc) others = others.filter((f) => !leftStrokes.includes(f))
+    const accPart = acc ? { acc } : {}
     const stem = others.find(
       (f) =>
         isStemLike(f) &&
@@ -139,7 +228,7 @@ export function recognizeCluster(strokes: Stroke[], staff: StaffCtx): Recognized
         f.box.y1 >= merged.y0 - 14,
     )
     const cy = merged.cy
-    const base = { x: merged.cx, y: cy, step: stepFromY(cy, staff) }
+    const base = { x: merged.cx, y: cy, step: stepFromY(cy, staff), ...accPart }
 
     if (!stem) {
       // Atajo de escritura rápida: círculo vacío = redonda, punto/garabato relleno = negra.
@@ -166,7 +255,11 @@ export function recognizeCluster(strokes: Stroke[], staff: StaffCtx): Recognized
       : { kind: 'note', dur: 'h', ...base, reason: 'cabeza vacía + plica (blanca)' }
   }
 
-  // 4) Varios trazos que forman un silencio (p.ej. silencio de corchea con punto).
+  // 4) Alteración suelta (escrita aparte de su nota).
+  const lone = recognizeAccidental(strokes)
+  if (lone) return { kind: 'accidental', acc: lone, x: all.cx, y: all.cy, reason: `alteración ${lone}` }
+
+  // 5) Varios trazos que forman un silencio (p.ej. silencio de corchea con punto).
   if (feats.length >= 2) {
     const biggest = feats.reduce((a, b) => (b.len > a.len ? b : a))
     const r = recognizeRest(biggest, staff)

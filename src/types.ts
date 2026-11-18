@@ -53,6 +53,8 @@ export interface Background {
   /** Separación entre sistemas (px) y compases por línea de la hoja digital, para casar con el papel. */
   rowH: number
   perRow: number
+  /** Anchos de compás de cada sistema del papel (px de layout), detectados al escanear. */
+  rowWidths?: number[][]
   /** Colocación de la imagen, en px de layout: esquina superior izquierda, escala (1 = ancho de la hoja) y giro. */
   x: number
   y: number

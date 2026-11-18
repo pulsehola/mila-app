@@ -1,12 +1,12 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { ImageIcon, Minus, Plus, Trash2 } from 'lucide-react'
+import { Hourglass, ImageIcon, Minus, MousePointerClick, Plus, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createTapTempo, engine } from './audio/engine'
 import { ArticulationPalette } from './components/ArticulationPalette'
 import { ExportModal } from './components/ExportModal'
 import { HelpModal } from './components/HelpModal'
 import { ModeSwitch } from './components/ModeSwitch'
-import { ScoreCanvas } from './components/ScoreCanvas'
+import { MAX_ZOOM, MIN_ZOOM, ScoreCanvas } from './components/ScoreCanvas'
 import { Splash } from './components/Splash'
 import { TopBar } from './components/TopBar'
 import { type TransportHandle, TransportBar } from './components/TransportBar'
@@ -30,6 +30,7 @@ import { Gallery } from './components/Gallery'
 import { BackgroundPanel } from './components/BackgroundPanel'
 import { ScanSheet } from './components/ScanSheet'
 import { fileToScan } from './scan/importScan'
+import { digitize } from './scan/digitize'
 import { blobToDataUrl, dataUrlToBlob, deleteImage, getImage, imageIdsOf, parseMilaImages, putImage } from './state/library'
 import { newId } from './state/music'
 import { useImageUrl } from './state/useImageUrl'
@@ -46,7 +47,9 @@ const SCAN_LAYOUT_W = 900
 function measuresToCover(bg: Background): number {
   const bottom = bg.y + bg.layoutWidth * bg.scale * (bg.naturalH / bg.naturalW)
   const rows = Math.max(1, Math.ceil((bottom - TOP_PAD - 24) / bg.rowH))
-  return Math.min(64, rows * bg.perRow)
+  let n = 0
+  for (let r = 0; r < rows; r++) n += bg.rowWidths?.[r]?.length ?? bg.perRow
+  return Math.min(64, n)
 }
 
 export default function App() {
@@ -65,6 +68,22 @@ export default function App() {
   const [modal, setModal] = useState<Modal>(null)
   const [fingerDraw, setFingerDraw] = useState(false)
   const [adjustBg, setAdjustBg] = useState(false)
+  const [userZoom, setUserZoom] = useState(1)
+  const [autoConvert, setAutoConvert] = useState(() => {
+    try {
+      return localStorage.getItem('mila:autoConvert') !== 'off'
+    } catch {
+      return true
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('mila:autoConvert', autoConvert ? 'on' : 'off')
+    } catch {
+      /* sin almacenamiento */
+    }
+  }, [autoConvert])
+  const zoomBy = useCallback((k: number) => setUserZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(z * k * 100) / 100))), [])
   const [bgPanel, setBgPanel] = useState(false)
   const [scanBusy, setScanBusy] = useState(false)
   const bgUrl = useImageUrl(score.background?.imageId)
@@ -409,12 +428,37 @@ export default function App() {
   )
 
   const handleScanFile = useCallback(
-    async (file: File) => {
+    async (file: File, convert: boolean) => {
       setScanBusy(true)
       try {
         const r = await fileToScan(file)
         const imageId = newId()
         await putImage(imageId, r.blob)
+        // Convertir la foto en notas editables (OMR) y alinear la hoja automáticamente.
+        const dig = convert ? await digitize(r.canvas).catch(() => null) : null
+        const pages = r.pages && r.pages.total > r.pages.used ? ` (se usaron ${r.pages.used} de ${r.pages.total} páginas)` : ''
+        if (dig) {
+          const bg: Background = { imageId, naturalW: r.width, naturalH: r.height, ...dig.placement, opacity: 0.35, enhance: true }
+          const blank = score.measures.every((m) => m.length === 0) && !(score.annotations ?? []).length && !score.background
+          const next = { title: r.title, measures: dig.measures.length ? dig.measures : [[]], background: bg }
+          if (blank) {
+            stopPlayback()
+            api.open({ ...score, ...next, title: score.title === 'Sin título' ? r.title : score.title })
+          } else {
+            await startScore({ ...emptyScore(), transposition: score.transposition, ...next }, '')
+          }
+          setModal(null)
+          setMode('notes')
+          setBgPanel(false)
+          setAdjustBg(false)
+          const n = dig.result.noteCount
+          showToast(
+            n
+              ? `Detecté ${n} notas en ${dig.measures.length} compases: revísalas y corrige lo que haga falta${pages}`
+              : `Encontré ${dig.result.staves.length} pentagramas pero ninguna nota clara: escríbelas encima${pages}`,
+          )
+          return
+        }
         const bg: Background = {
           imageId,
           naturalW: r.width,
@@ -442,8 +486,12 @@ export default function App() {
         setMode('notes')
         setBgPanel(true)
         setAdjustBg(true)
-        const pages = r.pages && r.pages.total > r.pages.used ? ` (se usaron ${r.pages.used} de ${r.pages.total} páginas)` : ''
-        showToast(`Arrastra la hoja y ajusta el tamaño hasta que el pentagrama coincida${pages}`)
+        showToast(
+          convert
+            ? `No encontré pentagramas claros en la foto: alinéala a mano (foto recta, buena luz)${pages}`
+            : `Arrastra la hoja y ajusta el tamaño hasta que el pentagrama coincida${pages}`,
+          convert ? 'warn' : 'info',
+        )
       } catch (e) {
         showToast(e instanceof Error ? e.message : 'No se pudo importar la partitura', 'warn')
       } finally {
@@ -452,6 +500,36 @@ export default function App() {
     },
     [api, score, startScore, stopPlayback, setMode, showToast],
   )
+
+  /** "Detectar notas" sobre un fondo ya colocado: reemplaza los compases por lo que se lee en el papel. */
+  const [detecting, setDetecting] = useState(false)
+  const detectNotes = useCallback(async () => {
+    const bg = score.background
+    if (!bg) return
+    setDetecting(true)
+    try {
+      const blob = await getImage(bg.imageId)
+      if (!blob) throw new Error('No encuentro la imagen escaneada')
+      const bmp = await createImageBitmap(blob)
+      const c = document.createElement('canvas')
+      c.width = bmp.width
+      c.height = bmp.height
+      c.getContext('2d')!.drawImage(bmp, 0, 0)
+      bmp.close()
+      const dig = await digitize(c)
+      if (!dig) return showToast('No encontré pentagramas claros en la imagen', 'warn')
+      stopPlayback()
+      api.setBackground({ ...bg, ...dig.placement, opacity: Math.min(bg.opacity, 0.35) }, true)
+      api.setMeasures(() => (dig.measures.length ? dig.measures : [[]]), false)
+      setSelectedId(null)
+      setAdjustBg(false)
+      showToast(`Detecté ${dig.result.noteCount} notas en ${dig.measures.length} compases · ⌘Z para deshacer`)
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'No se pudo analizar la imagen', 'warn')
+    } finally {
+      setDetecting(false)
+    }
+  }, [api, score.background, stopPlayback, showToast])
 
   const removeBackground = useCallback(() => {
     api.setBackground(undefined, true)
@@ -479,6 +557,10 @@ export default function App() {
     slur: () => onToggle('slur'),
     mode: () => setMode(mode === 'notes' ? 'annotate' : 'notes'),
     erase: () => setMode(mode === 'erase' ? 'notes' : 'erase'),
+    convert: () => window.dispatchEvent(new Event('mila:convert')),
+    zoomIn: () => zoomBy(1.25),
+    zoomOut: () => zoomBy(0.8),
+    zoomReset: () => setUserZoom(1),
   }
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -492,6 +574,9 @@ export default function App() {
       }
       if (mod && e.key.toLowerCase() === 'z') return run(e.shiftKey ? 'redo' : 'undo')
       if (mod && e.key.toLowerCase() === 'y') return run('redo')
+      if (mod && (e.key === '=' || e.key === '+')) return run('zoomIn')
+      if (mod && e.key === '-') return run('zoomOut')
+      if (mod && e.key === '0') return run('zoomReset')
       if (mod || e.altKey) return
       switch (e.key) {
         case ' ':
@@ -523,6 +608,8 @@ export default function App() {
           return run('mode')
         case 'g':
           return run('erase')
+        case 'Enter':
+          return run('convert')
       }
     }
     const up = (e: KeyboardEvent) => {
@@ -603,7 +690,28 @@ export default function App() {
             adjustBg={adjustBg && !!score.background}
             onBackground={onBackground}
             onScan={() => setModal('scan')}
+            autoConvert={autoConvert}
+            userZoom={userZoom}
+            onUserZoom={setUserZoom}
           />
+          {/* Zoom: pellizcar con dos dedos (o el trackpad), o estos botones */}
+          <div className="pointer-events-none absolute bottom-16 right-4 z-30 flex items-center gap-1 rounded-full border border-line bg-panel/95 p-1 shadow backdrop-blur">
+            <button type="button" aria-label="Alejar" onClick={() => zoomBy(0.8)} className="pointer-events-auto grid h-9 w-9 place-items-center rounded-full">
+              <ZoomOut size={17} />
+            </button>
+            <button
+              type="button"
+              aria-label="Zoom al 100%"
+              title="Toca para volver al 100%"
+              onClick={() => setUserZoom(1)}
+              className="pointer-events-auto h-9 min-w-[52px] rounded-full px-1 text-xs font-extrabold tabular-nums"
+            >
+              {Math.round(userZoom * 100)}%
+            </button>
+            <button type="button" aria-label="Acercar" onClick={() => zoomBy(1.25)} className="pointer-events-auto grid h-9 w-9 place-items-center rounded-full">
+              <ZoomIn size={17} />
+            </button>
+          </div>
           <AnimatePresence>
             {bgPanel && score.background && (
               <div className="pointer-events-none absolute right-4 top-3 z-40">
@@ -613,6 +721,8 @@ export default function App() {
                   onAdjust={setAdjustBg}
                   onChange={onBackground}
                   onRemove={removeBackground}
+                  onDetect={() => void detectNotes()}
+                  detecting={detecting}
                   onClose={() => {
                     setBgPanel(false)
                     setAdjustBg(false)
@@ -623,6 +733,24 @@ export default function App() {
           </AnimatePresence>
           <div className="pointer-events-none absolute bottom-3 left-4 z-30 flex items-center gap-2">
             <ModeSwitch mode={mode} onMode={setMode} />
+            {mode === 'notes' && (
+              <motion.button
+                type="button"
+                aria-pressed={autoConvert}
+                aria-label={autoConvert ? 'Convertir al hacer una pausa' : 'Convertir solo con el botón'}
+                title={autoConvert ? 'Convierte al hacer una pausa (toca para usar solo el botón Convertir)' : 'Convierte solo con el botón Convertir o Intro'}
+                onClick={() => {
+                  setAutoConvert((v) => !v)
+                  showToast(autoConvert ? 'Escribe el compás entero y toca «Convertir» (o Intro)' : 'Se convierte solo al hacer una pausa')
+                }}
+                whileTap={{ scale: 0.86 }}
+                transition={ELASTIC}
+                className="pointer-events-auto flex h-11 items-center gap-1.5 rounded-full border border-line bg-panel px-3 text-xs font-extrabold shadow"
+              >
+                {autoConvert ? <Hourglass size={16} /> : <MousePointerClick size={16} />}
+                <span className="hidden lg:inline">{autoConvert ? 'Al pausar' : 'Con botón'}</span>
+              </motion.button>
+            )}
             <motion.button
               type="button"
               aria-label="Borrar toda la partitura"
@@ -646,7 +774,7 @@ export default function App() {
                 className="pointer-events-auto flex h-11 items-center gap-1.5 rounded-full border border-line px-3 text-sm font-extrabold shadow"
                 style={{ background: bgPanel ? 'var(--la)' : 'var(--panel)', color: bgPanel ? '#2b2118' : 'var(--ink)' }}
               >
-                <ImageIcon size={17} /> Fondo
+                <ImageIcon size={17} /> <span className="hidden lg:inline">Fondo</span>
               </motion.button>
             )}
           </div>
@@ -689,7 +817,7 @@ export default function App() {
       <Tuner open={modal === 'tuner'} onClose={() => setModal(null)} transposition={score.transposition} />
       <ExportModal open={modal === 'export'} onClose={() => setModal(null)} score={score} onToast={showToast} />
       <HelpModal open={modal === 'help'} onClose={() => setModal(null)} />
-      <ScanSheet open={modal === 'scan'} busy={scanBusy} onClose={() => setModal(null)} onFile={(f) => void handleScanFile(f)} />
+      <ScanSheet open={modal === 'scan'} busy={scanBusy} onClose={() => setModal(null)} onFile={(f, convert) => void handleScanFile(f, convert)} />
       <Gallery
         open={modal === 'gallery'}
         onClose={() => setModal(null)}
