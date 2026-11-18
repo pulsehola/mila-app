@@ -25,9 +25,9 @@ import {
 } from './state/music'
 import { useScore } from './state/useScore'
 import type { Background, EditMode, LoopRange, Meter, Note, Score, Transposition, TupletKind } from './types'
-import { FOLDER_NAME, fileSlug, parseMilaFile, type SavedScore, toMilaFile } from './state/library'
+import { fileSlug, parseMilaFile, type SavedScore, toMilaFile } from './state/library'
 import { useLibrary } from './state/useLibrary'
-import { shareFile } from './export/share'
+import { saveFileAs } from './export/share'
 import { Gallery } from './components/Gallery'
 import { BackgroundPanel } from './components/BackgroundPanel'
 import { ScanSheet } from './components/ScanSheet'
@@ -37,7 +37,6 @@ import { blobToDataUrl, dataUrlToBlob, deleteImage, getImage, imageIdsOf, parseM
 import { newId } from './state/music'
 import { useImageUrl } from './state/useImageUrl'
 import { TOP_PAD } from './notation/renderScore'
-import { onRemoteChange, startCloud } from './cloud/sync'
 
 type Modal = 'tuner' | 'export' | 'help' | 'clear' | 'gallery' | 'scan' | null
 
@@ -61,12 +60,6 @@ export default function App() {
   /** Métrica de la partitura (las antiguas, sin este dato, son 4/4). */
   const meter: Meter = score.meter ?? '4/4'
   const lib = useLibrary(score)
-  // Copia en la nube: sesión guardada + sincronización; lo que llega de otro dispositivo refresca la galería.
-  const refreshLib = lib.refresh
-  useEffect(() => {
-    startCloud()
-    return onRemoteChange(() => void refreshLib())
-  }, [refreshLib])
 
   const [dark, setDark] = useState(() => localStorage.getItem('mila:theme') === 'dark')
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -413,28 +406,45 @@ export default function App() {
     [lib, api, score.transposition, score.background, showToast],
   )
 
-  /** Guardar en Archivos: hoja de compartir → «Guardar en Archivos» → carpeta Mila_partituras. */
+  /**
+   * «Guardar en…»: Mila elige dónde guardar (una carpeta del iPad o del móvil, iCloud Drive, Drive, la compu…).
+   * El archivo .mila.json lleva todo (y la foto si es escaneada) y se vuelve a abrir con «Abrir desde Archivos».
+   */
   const saveToFiles = useCallback(
     async (items: SavedScore[]) => {
-      await lib.flush()
       const single = items.length === 1
       const name = single
         ? `${fileSlug(items[0].score.title)}.mila.json`
         : `MILA-galeria-${new Date().toISOString().slice(0, 10)}.mila.json`
-      // Las partituras escaneadas viajan con su imagen dentro del archivo.
-      const images: Record<string, string> = {}
-      for (const id of imageIdsOf(items)) {
-        const blob = await getImage(id).catch(() => undefined)
-        if (blob) images[id] = await blobToDataUrl(blob)
+      const build = async () => {
+        await lib.flush()
+        // Las partituras escaneadas viajan con su imagen dentro del archivo.
+        const images: Record<string, string> = {}
+        for (const id of imageIdsOf(items)) {
+          const blob = await getImage(id).catch(() => undefined)
+          if (blob) images[id] = await blobToDataUrl(blob)
+        }
+        return new File([JSON.stringify(toMilaFile(items, images))], name, { type: 'application/json' })
       }
-      const file = new File([JSON.stringify(toMilaFile(items, images))], name, { type: 'application/json' })
-      const r = await shareFile(file, single ? items[0].score.title || 'Partitura MILA' : 'Partituras MILA')
-      if (r === 'shared') showToast(`Guardado ✓ (elige la carpeta ${FOLDER_NAME})`)
-      else if (r === 'downloaded') showToast(`Descargado: muévelo a la carpeta ${FOLDER_NAME}`)
-      else if (r === 'blocked') showToast('Toca otra vez para guardar')
+      try {
+        const r = await saveFileAs(name, build, single ? items[0].score.title || 'Partitura MILA' : 'Partituras MILA')
+        if (r === 'saved') showToast('Guardado ✓')
+        else if (r === 'shared') showToast('Listo ✓ (con «Guardar en Archivos» eliges la carpeta)')
+        else if (r === 'downloaded') showToast('Guardado en Descargas')
+        else if (r === 'blocked') showToast('Toca otra vez para guardar')
+      } catch {
+        showToast('No se pudo guardar el archivo', 'warn')
+      }
     },
     [lib, showToast],
   )
+
+  /** Guardar en… la partitura abierta (barra superior o ⌘S). */
+  const saveCurrentAs = useCallback(() => {
+    const now = Date.now()
+    const known = lib.items.find((x) => x.id === lib.currentId)
+    void saveToFiles([{ id: lib.currentId, score, createdAt: known?.createdAt ?? now, updatedAt: now }])
+  }, [lib.items, lib.currentId, score, saveToFiles])
 
   const importFiles = useCallback(
     async (files: File[]) => {
@@ -598,6 +608,7 @@ export default function App() {
     accent: () => onToggle('accent'),
     slur: () => onToggle('slur'),
     dot: () => onDot(),
+    save: () => saveCurrentAs(),
     tuplet3: () => onTuplet(3),
     mode: () => setMode(mode === 'notes' ? 'annotate' : 'notes'),
     erase: () => setMode(mode === 'erase' ? 'notes' : 'erase'),
@@ -618,6 +629,7 @@ export default function App() {
       }
       if (mod && e.key.toLowerCase() === 'z') return run(e.shiftKey ? 'redo' : 'undo')
       if (mod && e.key.toLowerCase() === 'y') return run('redo')
+      if (mod && e.key.toLowerCase() === 's') return run('save')
       if (mod && (e.key === '=' || e.key === '+')) return run('zoomIn')
       if (mod && e.key === '-') return run('zoomOut')
       if (mod && e.key === '0') return run('zoomReset')
@@ -692,6 +704,7 @@ export default function App() {
         onRedo={api.redo}
         onTuner={() => setModal('tuner')}
         onExport={() => setModal('export')}
+        onSave={saveCurrentAs}
         onHelp={() => setModal('help')}
         onGallery={() => {
           void lib.flush().then(lib.refresh)

@@ -5,10 +5,9 @@ import type { Score } from '../types'
 import { drawAnnotations } from '../notation/annotations'
 import { renderScore } from '../notation/renderScore'
 import { EXAMPLES } from '../state/examples'
-import { FOLDER_NAME, noteCount, type SavedScore, usedMeasures } from '../state/library'
+import { noteCount, type SavedScore, usedMeasures } from '../state/library'
 import { useImageUrl } from '../state/useImageUrl'
 import { ELASTIC } from './springs'
-import { CloudPanel } from './CloudPanel'
 import { Modal } from './ui'
 
 interface Props {
@@ -174,7 +173,7 @@ function Card({
           </div>
         </button>
         <div className="flex shrink-0 gap-1">
-          <IconMini label="Guardar en Archivos" onClick={onSave}>
+          <IconMini label="Guardar en…" onClick={onSave}>
             <FolderDown size={17} />
           </IconMini>
           <IconMini label="Duplicar" onClick={onDuplicate}>
@@ -232,18 +231,17 @@ function IconMini({
   )
 }
 
-/** "Mis partituras": galería guardada en el iPad + carpeta Mila_partituras en Archivos. */
+/** "Mis partituras": galería guardada en el dispositivo + «Guardar en…» donde Mila elija. */
 export function Gallery(p: Props) {
   const fileInput = useRef<HTMLInputElement>(null)
 
   return (
     <Modal open={p.open} onClose={p.onClose} title="Mis partituras" maxWidth={920}>
-      <CloudPanel />
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <p className="mr-auto text-xs text-muted">
-          Se guardan solas en este iPad, con notas, anotaciones, tempo y todo lo demás.
+          Se guardan solas en este dispositivo, con notas, anotaciones, tempo y todo lo demás.
           <br />
-          Copia de seguridad: carpeta <b className="text-ink">{FOLDER_NAME}</b> en la app Archivos.
+          Con <b className="text-ink">Guardar en…</b> eliges dónde guardar una copia (una carpeta, iCloud Drive, Drive…).
         </p>
         <motion.button
           type="button"
@@ -262,7 +260,7 @@ export function Gallery(p: Props) {
           onClick={() => p.onSaveToFiles(p.items)}
           className="flex h-10 items-center gap-1.5 rounded-2xl bg-ink px-3 text-sm font-extrabold text-paper disabled:opacity-40"
         >
-          <FolderDown size={17} /> Guardar todo en Archivos
+          <FolderDown size={17} /> Guardar todo en…
         </motion.button>
         <input
           ref={fileInput}

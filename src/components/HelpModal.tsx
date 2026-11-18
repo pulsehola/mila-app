@@ -148,9 +148,10 @@ export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onC
             lado borra toda la partitura, con confirmación; <kbd>⌘Z</kbd> la recupera.
           </li>
           <li>
-            <b>Mis partituras</b> (botón de cuadrícula arriba): todo se guarda solo en este iPad. Toca una tarjeta para
-            seguir editándola. Para tener copia en la app Archivos usa «Guardar en Archivos» y elige la carpeta
-            Mila_partituras (créala la primera vez); «Abrir desde Archivos» las trae de vuelta.
+            <b>Mis partituras</b> (botón de cuadrícula arriba): todo se guarda solo en este dispositivo. Toca una tarjeta
+            para seguir editándola. Con <b>Guardar en…</b> (carpeta verde arriba, en cada tarjeta, o <kbd>⌘S</kbd>) eliges
+            dónde guardar el archivo: en el iPad o el móvil, «Guardar en Archivos» y la carpeta que quieras (En mi iPad,
+            iCloud Drive, Drive…); en la compu, la ventana de guardar. «Abrir desde Archivos» las trae de vuelta.
           </li>
           <li>
             <b>Escanear</b> (en Mis partituras o en una hoja vacía): haz una foto o sube un PDF de tu partitura de papel.

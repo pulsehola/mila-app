@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { CircleHelp, Hand, LayoutGrid, Mic, Moon, Redo2, Share2, Sun, Undo2 } from 'lucide-react'
+import { CircleHelp, FolderDown, Hand, LayoutGrid, Mic, Moon, Redo2, Share2, Sun, Undo2 } from 'lucide-react'
 import type { Meter, Transposition } from '../types'
 import { METERS } from '../state/music'
 import { Logo, Wordmark } from './Logo'
@@ -23,6 +23,8 @@ interface Props {
   onRedo: () => void
   onTuner: () => void
   onExport: () => void
+  /** Guardar en… (Mila elige la carpeta). */
+  onSave: () => void
   onHelp: () => void
   onGallery: () => void
   fingerDraw: boolean
@@ -116,6 +118,9 @@ export function TopBar(p: Props) {
         </IconButton>
         <IconButton label="Mis partituras" onClick={p.onGallery} tone="sun" size={44}>
           <LayoutGrid size={20} />
+        </IconButton>
+        <IconButton label="Guardar en… (⌘S)" onClick={p.onSave} tone="mint" size={44}>
+          <FolderDown size={20} />
         </IconButton>
         <IconButton label="Afinador" onClick={p.onTuner} size={44}>
           <Mic size={20} />

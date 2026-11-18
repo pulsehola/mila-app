@@ -79,6 +79,45 @@ export async function shareFile(file: File, title: string): Promise<ShareResult>
   return 'downloaded'
 }
 
+export type SaveResult = 'saved' | ShareResult
+
+interface SavePickerWindow {
+  showSaveFilePicker?: (opts: {
+    suggestedName: string
+    types?: { description: string; accept: Record<string, string[]> }[]
+  }) => Promise<{ createWritable: () => Promise<{ write: (b: Blob) => Promise<void>; close: () => Promise<void> }> }>
+}
+
+/**
+ * «Guardar en…»: la persona elige dónde queda el archivo.
+ *  - Compu (Chrome/Edge): ventana de guardar del sistema, con carpeta y nombre a elegir.
+ *  - iPad / iPhone / Android: hoja de compartir → «Guardar en Archivos» (iCloud Drive, En mi iPad, Drive…).
+ *  - Sin nada de eso: descarga (el navegador pregunta dónde, si está así configurado).
+ * La ventana de guardar se abre ANTES de preparar el archivo para no perder el toque (lo exige el navegador).
+ */
+export async function saveFileAs(suggestedName: string, build: () => Promise<File>, title: string): Promise<SaveResult> {
+  const picker = (window as unknown as SavePickerWindow).showSaveFilePicker
+  if (typeof picker === 'function') {
+    let handle = null
+    try {
+      handle = await picker.call(window, {
+        suggestedName,
+        types: [{ description: 'Partitura de MILA', accept: { 'application/json': ['.json'] } }],
+      })
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return 'cancelled'
+    }
+    if (handle) {
+      const file = await build()
+      const w = await handle.createWritable()
+      await w.write(file)
+      await w.close()
+      return 'saved'
+    }
+  }
+  return shareFile(await build(), title)
+}
+
 /** Hoja nativa de compartir (AirDrop, WhatsApp, Mensajes...). Si no hay soporte, descarga el archivo. */
 export async function shareScore(score: Score, fmt: ExportFormat): Promise<ShareResult> {
   return shareFile(await buildFile(score, fmt), score.title || 'Partitura MILA')
