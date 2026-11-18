@@ -84,11 +84,15 @@ export function HelpModal({ open, onClose }: { open: boolean; onClose: () => voi
             Modo <b>Anotar</b> (abajo a la izquierda): textos como “ENTRA DIRECTO”, flechas o recuadros se guardan tal cual, en
             azul, pegados a su compás. Tacha en zig-zag por encima para borrarlos. También salen en el PDF y la imagen.
           </li>
+          <li>
+            <b>Goma</b>: toca una nota o pasa por encima de varias para borrarlas (también anotaciones). La papelera de al
+            lado borra toda la partitura, con confirmación; <kbd>⌘Z</kbd> la recupera.
+          </li>
           <li>El punto junto a cada compás avisa si faltan o sobran tiempos (4/4).</li>
           <li>
             Mac: <kbd>Espacio</kbd> play/pausa · <kbd>⌘Z</kbd> deshacer · <kbd>⇧⌘Z</kbd> rehacer · <kbd>⌫</kbd> borra la nota · <kbd>↑ ↓</kbd> tono ·{' '}
             <kbd>← →</kbd> navegar · <kbd>#</kbd> <kbd>b</kbd> <kbd>n</kbd> alteraciones · <kbd>S</kbd> staccato · <kbd>A</kbd> acento · <kbd>L</kbd> ligadura ·{' '}
-            <kbd>M</kbd> Notas/Anotar
+            <kbd>M</kbd> Notas/Anotar · <kbd>G</kbd> goma
           </li>
         </ul>
       </div>

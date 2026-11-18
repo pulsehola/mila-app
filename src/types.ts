@@ -47,7 +47,7 @@ export interface Score {
   annotations?: Annotation[]
 }
 
-export type EditMode = 'notes' | 'annotate'
+export type EditMode = 'notes' | 'annotate' | 'erase'
 
 export interface LoopRange {
   start: number

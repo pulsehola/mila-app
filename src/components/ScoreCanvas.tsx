@@ -27,6 +27,7 @@ import {
   createAnnotation,
   drawAnnotations,
   inkInside,
+  inkNear,
   JOIN_MS,
   shouldJoin,
 } from '../notation/annotations'
@@ -36,6 +37,8 @@ import { drawStroke } from './ink'
 const RECOGNIZE_DELAY = 600
 /** Si el Pencil sigue flotando sobre la pantalla se espera algo más, pero nunca más de esto. */
 const MAX_WAIT = 1600
+/** Radio de la goma (px). */
+const ERASE_R = 16
 const DRAG_THRESHOLD = 7
 const NOTE_HIT_X = 15
 const NOTE_HIT_Y = 17
@@ -64,6 +67,8 @@ interface Active {
   pen: boolean
   target: { id: string; measure: number; index: number; kind: 'note' | 'rest'; x: number; y: number } | null
   mode: 'undecided' | 'ink' | 'drag'
+  /** Goma: ids ya borrados en este gesto (el layout se actualiza un instante después). */
+  erased: Set<string>
   startX: number
   startY: number
   startStep: number
@@ -81,7 +86,7 @@ export function ScoreCanvas(p: Props) {
   const layoutRef = useRef<Layout | null>(null)
   const annotRef = useRef<HTMLCanvasElement>(null)
   const popRef = useRef<string[]>([])
-  const [bursts, setBursts] = useState<{ id: string; x: number; y: number }[]>([])
+  const [bursts, setBursts] = useState<{ id: string; x: number; y: number; erase?: boolean }[]>([])
   const propsRef = useRef(p)
   propsRef.current = p
 
@@ -149,7 +154,22 @@ export function ScoreCanvas(p: Props) {
     for (const s of pendingRef.current) drawStroke(ctx, s.stroke, s.pen, true)
     const a = activeRef.current
     if (a && a.mode !== 'drag') {
-      if (propsRef.current.mode === 'annotate') {
+      if (propsRef.current.mode === 'erase') {
+        // Rastro de la goma: banda suave + círculo en la punta.
+        const coral = css.getPropertyValue('--coral').trim() || '#ff6b4a'
+        ctx.save()
+        ctx.globalAlpha = 0.18
+        ctx.fillStyle = coral
+        drawStroke(ctx, a.pts, false, false, ERASE_R * 2)
+        ctx.globalAlpha = 0.9
+        ctx.strokeStyle = coral
+        ctx.lineWidth = 2
+        const tip = a.pts[a.pts.length - 1]
+        ctx.beginPath()
+        ctx.arc(tip.x, tip.y, ERASE_R, 0, Math.PI * 2)
+        ctx.stroke()
+        ctx.restore()
+      } else if (propsRef.current.mode === 'annotate') {
         ctx.fillStyle = css.getPropertyValue('--annot').trim() || '#2f62d6'
         drawStroke(ctx, a.pts, a.pen, false, 4.6)
       } else drawStroke(ctx, a.pts, a.pen, false)
@@ -169,18 +189,33 @@ export function ScoreCanvas(p: Props) {
   }, [layout, redrawInk])
 
   // ---- Capa de anotaciones (vectorial, encima de la partitura) ---------------
-  useEffect(() => {
+  /** Pinta la capa de anotaciones; las marcadas por la goma (aún sin soltar el lápiz) salen atenuadas. */
+  const drawAnnotLayer = useCallback((fade?: Set<string>) => {
     const canvas = annotRef.current
-    if (!canvas || !layout) return
+    const l = layoutRef.current
+    if (!canvas || !l) return
     const dpr = window.devicePixelRatio || 1
-    canvas.width = Math.round(layout.width * dpr)
-    canvas.height = Math.round(layout.height * dpr)
+    const w = Math.round(l.width * dpr)
+    const h = Math.round(l.height * dpr)
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w
+      canvas.height = h
+    }
     const ctx = canvas.getContext('2d')!
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, layout.width, layout.height)
+    ctx.clearRect(0, 0, l.width, l.height)
     const color = getComputedStyle(canvas).getPropertyValue('--annot').trim() || '#2f62d6'
-    drawAnnotations(ctx, p.annotations, layout, color)
-  }, [layout, p.annotations])
+    const list = propsRef.current.annotations
+    if (!fade?.size) return drawAnnotations(ctx, list, l, color)
+    drawAnnotations(ctx, list.filter((a) => !fade.has(a.id)), l, color)
+    ctx.globalAlpha = 0.2
+    drawAnnotations(ctx, list.filter((a) => fade.has(a.id)), l, color)
+    ctx.globalAlpha = 1
+  }, [])
+
+  useEffect(() => {
+    drawAnnotLayer()
+  }, [layout, p.annotations, drawAnnotLayer])
 
   /** Copia la tinta pendiente y la encoge/desvanece hacia la nota reconocida (transición trazo → partitura). */
   const ghostInk = useCallback((cx: number, cy: number) => {
@@ -306,9 +341,9 @@ export function ScoreCanvas(p: Props) {
 
   useEffect(() => () => window.clearTimeout(timerRef.current), [])
 
-  // Al pasar a modo anotación, lo que estuviera pendiente se reconoce ya.
+  // Al salir del modo Notas, lo que estuviera pendiente se reconoce ya.
   useEffect(() => {
-    if (p.mode === 'annotate' && pendingRef.current.length) flush()
+    if (p.mode !== 'notes' && pendingRef.current.length) flush()
   }, [p.mode, flush])
 
   // ---- Anotaciones a mano alzada --------------------------------------------
@@ -408,7 +443,7 @@ export function ScoreCanvas(p: Props) {
     e.preventDefault()
     captureRef.current!.setPointerCapture(e.pointerId)
     const { x, y } = local(e)
-    const target = cur.mode === 'annotate' ? null : findTarget(x, y)
+    const target = cur.mode === 'notes' ? findTarget(x, y) : null
     const pen = type === 'pen'
     const first: Pt = { x, y, p: pen ? e.pressure || 0.5 : 0.5, t: performance.now() }
     const n = target && target.kind === 'note' ? cur.measures[target.measure]?.[target.index] : undefined
@@ -423,8 +458,63 @@ export function ScoreCanvas(p: Props) {
       startStep: n?.step ?? 0,
       recorded: false,
       lastStep: n?.step ?? 0,
+      erased: new Set(),
     }
     window.clearTimeout(timerRef.current)
+    if (cur.mode === 'erase') {
+      eraseAt(activeRef.current, x, y)
+      scheduleRedraw()
+    }
+  }
+
+  /**
+   * Goma, mientras se arrastra: marca (y atenúa) lo que toca la punta. No borra todavía, para que las notas
+   * restantes no se recoloquen bajo el lápiz a mitad de gesto.
+   */
+  const eraseAt = (a: Active, x: number, y: number) => {
+    const l = layoutRef.current
+    const cur = propsRef.current
+    if (!l) return
+    const notes = l.notes.filter(
+      (n) => !a.erased.has(n.id) && Math.abs(n.x - x) <= ERASE_R && Math.abs(n.y - y) <= ERASE_R + 4,
+    )
+    const anns = cur.annotations.filter((an) => !a.erased.has(an.id) && inkNear(an, l, x, y, ERASE_R))
+    if (!notes.length && !anns.length) return
+    for (const n of notes) {
+      a.erased.add(n.id)
+      const el = hostRef.current && noteElement(hostRef.current, n.id)
+      if (el) el.style.opacity = '0.2'
+    }
+    for (const an of anns) a.erased.add(an.id)
+    if (anns.length) drawAnnotLayer(a.erased)
+  }
+
+  /** Goma, al levantar el lápiz: borra todo lo marcado en un único paso de deshacer. */
+  const commitErase = (a: Active) => {
+    const l = layoutRef.current
+    const cur = propsRef.current
+    const ids = a.erased
+    if (!l || ids.size === 0) return
+    const notes = l.notes.filter((n) => ids.has(n.id))
+    const hasAnns = cur.annotations.some((an) => ids.has(an.id))
+    cur.onEdit()
+    if (notes.length) {
+      cur.setMeasures((ms) => ms.map((m) => (m.some((n) => ids.has(n.id)) ? m.filter((n) => !ids.has(n.id)) : m)))
+      if (cur.selectedId && ids.has(cur.selectedId)) cur.onSelect(null)
+    }
+    if (hasAnns) cur.setAnnotations((list) => list.filter((an) => !ids.has(an.id)), notes.length === 0)
+    const stamp = Math.round(performance.now())
+    setBursts((b) => [...b, ...notes.map((n) => ({ id: `e-${n.id}-${stamp}`, x: n.x, y: n.y, erase: true }))])
+  }
+
+  /** Gesto de goma cancelado (p.ej. por el sistema): se restaura lo atenuado. */
+  const cancelErase = (a: Active) => {
+    const host = hostRef.current
+    for (const id of a.erased) {
+      const el = host && noteElement(host, id)
+      if (el) el.style.opacity = ''
+    }
+    drawAnnotLayer()
   }
 
   const applyDrag = (a: Active, y: number) => {
@@ -500,6 +590,7 @@ export function ScoreCanvas(p: Props) {
         }
       }
       if (a.mode === 'drag') applyDrag(a, y)
+      else if (propsRef.current.mode === 'erase') eraseAt(a, x, y)
     }
     if (a.mode !== 'drag') scheduleRedraw()
   }
@@ -512,6 +603,12 @@ export function ScoreCanvas(p: Props) {
     const moved = Math.hypot(box.w, box.h)
 
     if (a.mode === 'drag') return
+
+    if (cur.mode === 'erase') {
+      commitErase(a)
+      redrawInk()
+      return
+    }
 
     if (cur.mode === 'annotate') {
       if (moved >= 3) {
@@ -573,7 +670,10 @@ export function ScoreCanvas(p: Props) {
     if (!a || a.pointerId !== e.pointerId) return
     activeRef.current = null
     if (e.type !== 'pointercancel') finishStroke(a)
-    else redrawInk()
+    else {
+      if (a.erased.size) cancelErase(a)
+      redrawInk()
+    }
   }
 
   // ---- Auto-scroll del cursor --------------------------------------------
@@ -752,7 +852,7 @@ export function ScoreCanvas(p: Props) {
               onAnimationComplete={() => setBursts((list) => list.filter((x) => x.id !== b.id))}
             >
               <motion.span
-                className="absolute rounded-full border-2 border-mi"
+                className={`absolute rounded-full border-2 ${b.erase ? 'border-coral' : 'border-mi'}`}
                 style={{ width: 40, height: 40, left: -20, top: -20 }}
                 initial={{ scale: 0.3 }}
                 animate={{ scale: 1.6 }}
@@ -764,7 +864,11 @@ export function ScoreCanvas(p: Props) {
                   <motion.span
                     key={i}
                     className="absolute h-[5px] w-[5px] rounded-full"
-                    style={{ left: -2.5, top: -2.5, background: i % 2 ? 'var(--la)' : 'var(--mi)' }}
+                    style={{
+                      left: -2.5,
+                      top: -2.5,
+                      background: b.erase ? (i % 2 ? 'var(--coral)' : 'var(--muted)') : i % 2 ? 'var(--la)' : 'var(--mi)',
+                    }}
                     initial={{ x: 0, y: 0, scale: 1 }}
                     animate={{ x: Math.cos(ang) * 26, y: Math.sin(ang) * 26, scale: 0.3 }}
                     transition={{ duration: 0.5, ease: [0.2, 0.8, 0.3, 1] }}
@@ -793,7 +897,7 @@ export function ScoreCanvas(p: Props) {
           ref={captureRef}
           data-testid="capture"
           className="absolute inset-0 z-10"
-          style={{ touchAction: 'none', cursor: p.mode === 'annotate' ? 'text' : 'crosshair', WebkitUserSelect: 'none' }}
+          style={{ touchAction: 'none', cursor: p.mode === 'annotate' ? 'text' : p.mode === 'erase' ? 'cell' : 'crosshair', WebkitUserSelect: 'none' }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endPointer}

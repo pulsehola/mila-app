@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Music2, PenLine } from 'lucide-react'
+import { Eraser, Music2, PenLine } from 'lucide-react'
 import type { EditMode } from '../types'
 import { ELASTIC } from './springs'
 
@@ -11,9 +11,15 @@ interface Props {
 const OPTIONS: { key: EditMode; label: string; hint: string; Icon: typeof Music2; color: string }[] = [
   { key: 'notes', label: 'Notas', hint: 'El trazo se convierte en partitura', Icon: Music2, color: 'var(--mi)' },
   { key: 'annotate', label: 'Anotar', hint: 'Texto, flechas y recuadros a mano', Icon: PenLine, color: 'var(--annot)' },
+  { key: 'erase', label: 'Goma', hint: 'Toca o pasa por encima para borrar', Icon: Eraser, color: 'var(--coral)' },
 ]
 
-/** Barra rápida: alterna entre escribir notas (reconocidas) y anotar a mano alzada (se guarda tal cual). Tecla M. */
+const KEYS: Record<EditMode, string> = { notes: 'M', annotate: 'M', erase: 'G' }
+
+/**
+ * Barra rápida: escribir notas (reconocidas), anotar a mano alzada (se guarda tal cual) o goma.
+ * Teclas: M alterna Notas/Anotar, G activa/desactiva la goma.
+ */
 export function ModeSwitch({ mode, onMode }: Props) {
   return (
     <div
@@ -29,11 +35,11 @@ export function ModeSwitch({ mode, onMode }: Props) {
             type="button"
             role="radio"
             aria-checked={on}
-            title={`${label} · ${hint} (M)`}
+            title={`${label} · ${hint} (${KEYS[key]})`}
             onClick={() => onMode(key)}
             whileTap={{ scale: 0.9 }}
             transition={ELASTIC}
-            className="relative flex h-11 items-center gap-1.5 rounded-full px-4 text-sm font-extrabold"
+            className="relative flex h-11 items-center gap-1.5 rounded-full px-3.5 text-sm font-extrabold"
             style={{ color: on ? '#fff' : 'var(--muted)' }}
           >
             {on && (

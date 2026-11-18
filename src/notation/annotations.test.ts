@@ -7,6 +7,7 @@ import {
   appendStroke,
   createAnnotation,
   inkInside,
+  inkNear,
   nearestMeasure,
   placeAnnotation,
   shouldJoin,
@@ -93,6 +94,13 @@ describe('anotaciones a mano alzada', () => {
     const a = createAnnotation('r1', box, true, l)!
     expect(inkInside(a, l, { x0: 150, y0: 50, x1: 230, y1: 90 })).toBe(true) // esquina superior derecha
     expect(inkInside(a, l, { x0: 80, y0: 75, x1: 160, y1: 105 })).toBe(false) // hueco del recuadro
+  })
+
+  it('la goma alcanza la tinta (también a mitad de un trazo recto largo) pero no el vacío', () => {
+    const l = layout()
+    const a = createAnnotation('g1', line(40, 20, 240, 20, 2), true, l)! // solo 2 muestras: segmento largo
+    expect(inkNear(a, l, 140, 26, 16)).toBe(true)
+    expect(inkNear(a, l, 140, 60, 16)).toBe(false)
   })
 
   it('se guardan y se recuperan; las de compases inexistentes se descartan', () => {

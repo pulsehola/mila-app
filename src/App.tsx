@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Minus, Plus } from 'lucide-react'
+import { Minus, Plus, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createTapTempo, engine } from './audio/engine'
 import { ArticulationPalette } from './components/ArticulationPalette'
@@ -11,7 +11,8 @@ import { Splash } from './components/Splash'
 import { TopBar } from './components/TopBar'
 import { type TransportHandle, TransportBar } from './components/TransportBar'
 import { Tuner } from './components/Tuner'
-import { Toast } from './components/ui'
+import { ELASTIC } from './components/springs'
+import { Toast, Modal as UiModal } from './components/ui'
 import { EXAMPLES, emptyScore } from './state/examples'
 import {
   buildEvents,
@@ -23,7 +24,7 @@ import {
 import { useScore } from './state/useScore'
 import type { EditMode, LoopRange, Note, Transposition } from './types'
 
-type Modal = 'tuner' | 'export' | 'help' | null
+type Modal = 'tuner' | 'export' | 'help' | 'clear' | null
 
 const NO_ANNOTATIONS: never[] = []
 
@@ -62,7 +63,7 @@ export default function App() {
 
   const setMode = useCallback((m: EditMode) => {
     setModeState(m)
-    if (m === 'annotate') setSelectedId(null)
+    if (m !== 'notes') setSelectedId(null)
   }, [])
 
   // ---- Motor de audio ------------------------------------------------------
@@ -235,6 +236,15 @@ export default function App() {
     [score.measures, selectedId],
   )
 
+  const clearAll = useCallback(() => {
+    stopPlayback()
+    api.clearAll()
+    setSelectedId(null)
+    setLoopRange(null)
+    setModal(null)
+    showToast('Partitura borrada · ⌘Z para recuperarla')
+  }, [api, stopPlayback, showToast])
+
   const loadExample = useCallback(
     (key: string) => {
       stopPlayback()
@@ -266,6 +276,7 @@ export default function App() {
     accent: () => onToggle('accent'),
     slur: () => onToggle('slur'),
     mode: () => setMode(mode === 'notes' ? 'annotate' : 'notes'),
+    erase: () => setMode(mode === 'erase' ? 'notes' : 'erase'),
   }
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -308,6 +319,8 @@ export default function App() {
           return run('slur')
         case 'm':
           return run('mode')
+        case 'g':
+          return run('erase')
       }
     }
     const up = (e: KeyboardEvent) => {
@@ -381,8 +394,19 @@ export default function App() {
             onToast={showToast}
             onEdit={stopPlayback}
           />
-          <div className="pointer-events-none absolute bottom-3 left-4 z-30">
+          <div className="pointer-events-none absolute bottom-3 left-4 z-30 flex items-center gap-2">
             <ModeSwitch mode={mode} onMode={setMode} />
+            <motion.button
+              type="button"
+              aria-label="Borrar toda la partitura"
+              title="Borrar toda la partitura"
+              onClick={() => setModal('clear')}
+              whileTap={{ scale: 0.86, rotate: -6 }}
+              transition={ELASTIC}
+              className="pointer-events-auto grid h-11 w-11 place-items-center rounded-full border border-line bg-panel text-bad shadow"
+            >
+              <Trash2 size={18} />
+            </motion.button>
           </div>
           <div className="pointer-events-none absolute bottom-3 right-4 z-30 flex gap-2">
             <button
@@ -423,6 +447,32 @@ export default function App() {
       <Tuner open={modal === 'tuner'} onClose={() => setModal(null)} transposition={score.transposition} />
       <ExportModal open={modal === 'export'} onClose={() => setModal(null)} score={score} onToast={showToast} />
       <HelpModal open={modal === 'help'} onClose={() => setModal(null)} />
+      <UiModal open={modal === 'clear'} onClose={() => setModal(null)} title="¿Borrar toda la partitura?" maxWidth={420}>
+        <p className="text-sm text-muted">
+          Se borran todas las notas y anotaciones y vuelve a 4 compases vacíos. El título y el tempo se mantienen.
+          Si te arrepientes, <b className="text-ink">Deshacer</b> la recupera.
+        </p>
+        <div className="mt-5 flex gap-2">
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.95 }}
+            transition={ELASTIC}
+            onClick={() => setModal(null)}
+            className="h-12 flex-1 rounded-2xl border border-line bg-paper font-extrabold"
+          >
+            Cancelar
+          </motion.button>
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.95 }}
+            transition={ELASTIC}
+            onClick={clearAll}
+            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl bg-bad font-extrabold text-white"
+          >
+            <Trash2 size={18} /> Borrar todo
+          </motion.button>
+        </div>
+      </UiModal>
       <Toast msg={toast?.msg ?? null} tone={toast?.tone ?? 'info'} />
       <Splash />
     </div>

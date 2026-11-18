@@ -79,6 +79,7 @@ export interface ScoreApi {
   addMeasure: () => void
   removeLastMeasure: () => void
   clear: () => void
+  clearAll: () => void
 }
 
 export function useScore(): ScoreApi {
@@ -172,6 +173,17 @@ export function useScore(): ScoreApi {
     setMeasures((m) => m.map(() => []))
   }, [setMeasures])
 
+  /** Borra toda la partitura (notas, anotaciones y compases extra). Se puede deshacer. */
+  const clearAll = useCallback(() => {
+    const cur = scoreRef.current
+    if (cur.measures.every((m) => m.length === 0) && !(cur.annotations ?? []).length && cur.measures.length <= 4) return
+    push(snap())
+    const next = { ...cur, measures: [[], [], [], []] as Measure[], annotations: [] }
+    scoreRef.current = next
+    setScore(next)
+    force((n) => n + 1)
+  }, [])
+
   return {
     score,
     canUndo: undoRef.current.length > 0,
@@ -185,5 +197,6 @@ export function useScore(): ScoreApi {
     addMeasure,
     removeLastMeasure,
     clear,
+    clearAll,
   }
 }

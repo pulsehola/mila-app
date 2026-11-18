@@ -129,6 +129,33 @@ export function inkInside(a: Annotation, l: Layout, box: { x0: number; y0: numbe
   return false
 }
 
+/** ¿Hay tinta de la anotación a menos de `r` px del punto? (goma) */
+export function inkNear(a: Annotation, l: Layout, x: number, y: number, r: number): boolean {
+  const p = placeAnnotation(a, l)
+  if (!p) return false
+  const r2 = r * r
+  for (const s of a.strokes)
+    for (let i = 0; i < s.length; i++) {
+      const [dx, dy] = s[i]
+      const px = p.ox + dx * p.k
+      const py = p.oy + dy * p.k
+      if ((px - x) ** 2 + (py - y) ** 2 <= r2) return true
+      // Tramos largos entre muestras (líneas rectas): comprobar también el segmento.
+      if (i > 0) {
+        const qx = p.ox + s[i - 1][0] * p.k
+        const qy = p.oy + s[i - 1][1] * p.k
+        const vx = px - qx
+        const vy = py - qy
+        const len2 = vx * vx + vy * vy
+        if (len2 > 0) {
+          const t = Math.max(0, Math.min(1, ((x - qx) * vx + (y - qy) * vy) / len2))
+          if ((qx + t * vx - x) ** 2 + (qy + t * vy - y) ** 2 <= r2) return true
+        }
+      }
+    }
+  return false
+}
+
 /** Dibuja la capa de anotaciones en un canvas 2D (pantalla, PDF o imagen). */
 export function drawAnnotations(
   ctx: CanvasRenderingContext2D,
