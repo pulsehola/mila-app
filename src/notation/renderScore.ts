@@ -3,15 +3,17 @@ import {
   Articulation,
   Beam,
   Curve,
+  Dot,
   Formatter,
   Modifier,
   Renderer,
   Stave,
   StaveNote,
+  Tuplet as VfTuplet,
   Voice,
 } from 'vexflow'
 import type { Measure, Meter } from '../types'
-import { vexKey } from '../state/music'
+import { TUPLET_NORMAL, vexKey } from '../state/music'
 
 export const ROW_H = 160
 export const TOP_PAD = 54
@@ -163,9 +165,11 @@ function drawNotes(
       keys: [isRest ? 'b/4' : vexKey(n.step)],
       duration: isRest ? `${n.dur}r` : n.dur,
       clef: 'treble',
+      ...(n.dot ? { dots: 1 } : {}),
       ...(isRest || n.dur === 'w' ? {} : { stemDirection: stemUp ? 1 : -1 }),
     })
     note.setAttribute('id', n.id)
+    if (n.dot) Dot.buildAndAttach([note], { all: true })
     if (!isRest) {
       if (n.acc) note.addModifier(new VfAccidental(n.acc), 0)
       const pos = stemUp ? Modifier.Position.BELOW : Modifier.Position.ABOVE
@@ -175,6 +179,20 @@ function drawNotes(
     return note
   })
 
+  // Grupos especiales (tresillo, quintillo, seisillo): notas consecutivas con el mismo id de grupo.
+  const tuplets: VfTuplet[] = []
+  for (let i = 0; i < m.length; ) {
+    const t = m[i].tuplet
+    if (!t) {
+      i++
+      continue
+    }
+    let j = i
+    while (j < m.length && m[j].tuplet?.id === t.id) j++
+    tuplets.push(new VfTuplet(vfNotes.slice(i, j), { numNotes: t.n, notesOccupied: TUPLET_NORMAL[t.n], ratioed: false }))
+    i = j
+  }
+
   const [numBeats, beatValue] = meter.split('/').map(Number)
   const voice = new Voice({ numBeats, beatValue }).setMode(Voice.Mode.SOFT)
   voice.addTickables(vfNotes)
@@ -183,6 +201,7 @@ function drawNotes(
   const beams = Beam.generateBeams(vfNotes)
   voice.draw(ctx, stave)
   beams.forEach((b) => b.setContext(ctx).draw())
+  tuplets.forEach((t) => t.setContext(ctx).draw())
 
   // Ligaduras de expresión hacia la nota siguiente (dentro del mismo compás).
   m.forEach((n, i) => {

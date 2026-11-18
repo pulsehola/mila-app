@@ -79,6 +79,7 @@ function describe(r: Recognized): string {
   if (r.kind === 'rest') return `Silencio de ${DUR_LABEL[r.dur].toLowerCase()}`
   if (r.kind === 'accidental') return r.acc === '#' ? 'Sostenido' : r.acc === 'b' ? 'Bemol' : 'Becuadro'
   if (r.kind === 'barline') return 'Barra de compás'
+  if (r.kind === 'dot') return 'Puntillo'
   return 'algo que aún no conozco'
 }
 

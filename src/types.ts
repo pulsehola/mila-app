@@ -17,6 +17,19 @@ export interface Note {
   accent: boolean
   /** Ligadura de expresión hacia la nota siguiente. */
   slur: boolean
+  /** Puntillo: suma la mitad del valor de la figura (negra con puntillo = 1½ tiempos). */
+  dot?: boolean
+  /**
+   * Grupo de valoración especial al que pertenece (notas consecutivas con el mismo `id`):
+   * 3 = tresillo (3 en el tiempo de 2), 5 = quintillo y 6 = seisillo (5 o 6 en el tiempo de 4).
+   */
+  tuplet?: Tuplet
+}
+
+export type TupletKind = 3 | 5 | 6
+export interface Tuplet {
+  id: string
+  n: TupletKind
 }
 
 export type Measure = Note[]

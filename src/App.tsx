@@ -24,7 +24,7 @@ import {
   writtenMidi,
 } from './state/music'
 import { useScore } from './state/useScore'
-import type { Background, EditMode, LoopRange, Meter, Note, Score, Transposition } from './types'
+import type { Background, EditMode, LoopRange, Meter, Note, Score, Transposition, TupletKind } from './types'
 import { FOLDER_NAME, fileSlug, parseMilaFile, type SavedScore, toMilaFile } from './state/library'
 import { useLibrary } from './state/useLibrary'
 import { shareFile } from './export/share'
@@ -247,6 +247,44 @@ export default function App() {
       editSelected((n) => ({ ...n, [k]: !n[k] }))
     },
     [selected, editSelected],
+  )
+
+  /** Puntillo: suma la mitad del valor (también en silencios). */
+  const onDot = useCallback(() => {
+    if (!selected) return
+    editSelected((n) => ({ ...n, dot: !n.dot }))
+  }, [selected, editSelected])
+
+  /**
+   * Grupo especial desde la nota seleccionada: toma esa nota y las siguientes del compás hasta completar `k`
+   * figuras (tresillo 3, quintillo 5, seisillo 6). Si la nota ya está en un grupo igual, lo deshace.
+   */
+  const onTuplet = useCallback(
+    (k: TupletKind) => {
+      if (!selected) return
+      stopPlayback()
+      const { mi, idx, note } = selected
+      api.setMeasures((ms) =>
+        ms.map((m, i) => {
+          if (i !== mi) return m
+          const old = note.tuplet
+          // Deshacer el grupo actual de la nota (siempre); si era del mismo tipo, ahí termina.
+          let out = old ? m.map((n) => (n.tuplet?.id === old.id ? { ...n, tuplet: undefined } : n)) : m
+          if (old?.n === k) return out
+          const id = newId()
+          const end = Math.min(out.length, idx + k)
+          const touched = new Set<string>()
+          for (let j = idx; j < end; j++) if (out[j].tuplet) touched.add(out[j].tuplet!.id)
+          out = out.map((n, j) => {
+            if (j >= idx && j < end) return { ...n, tuplet: { id, n: k } }
+            if (n.tuplet && touched.has(n.tuplet.id)) return { ...n, tuplet: undefined }
+            return n
+          })
+          return out
+        }),
+      )
+    },
+    [selected, api, stopPlayback],
   )
 
   const deleteSelected = useCallback(() => {
@@ -552,6 +590,8 @@ export default function App() {
     staccato: () => onToggle('staccato'),
     accent: () => onToggle('accent'),
     slur: () => onToggle('slur'),
+    dot: () => onDot(),
+    tuplet3: () => onTuplet(3),
     mode: () => setMode(mode === 'notes' ? 'annotate' : 'notes'),
     erase: () => setMode(mode === 'erase' ? 'notes' : 'erase'),
     convert: () => window.dispatchEvent(new Event('mila:convert')),
@@ -601,6 +641,10 @@ export default function App() {
           return run('accent')
         case 'l':
           return run('slur')
+        case '.':
+          return run('dot')
+        case '3':
+          return run('tuplet3')
         case 'm':
           return run('mode')
         case 'g':
@@ -654,7 +698,15 @@ export default function App() {
       />
 
       <div className="relative flex min-h-0 flex-1">
-        <ArticulationPalette note={selected?.note ?? null} canSlur={canSlur} onAcc={onAcc} onToggle={onToggle} onDelete={deleteSelected} />
+        <ArticulationPalette
+          note={selected?.note ?? null}
+          canSlur={canSlur}
+          onAcc={onAcc}
+          onToggle={onToggle}
+          onDot={onDot}
+          onTuplet={onTuplet}
+          onDelete={deleteSelected}
+        />
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <AnimatePresence>
             {loopOn && (

@@ -181,13 +181,38 @@ export async function deleteScore(id: string): Promise<void> {
 
 // ---- Imágenes de fondo (escaneos) -------------------------------------------
 
-export async function putImage(id: string, blob: Blob): Promise<void> {
-  askPersist()
-  await run('readwrite', (s) => s.put(blob, id), IMAGES)
+/**
+ * Las imágenes se guardan como bytes (ArrayBuffer + tipo), no como Blob/File: Safari del iPad falla a veces al
+ * guardar Blobs en IndexedDB ("Error preparing Blob/File data to be stored in object store"). Las guardadas
+ * antes como Blob se siguen leyendo.
+ */
+interface StoredImage {
+  bytes: ArrayBuffer
+  type: string
 }
 
-export function getImage(id: string): Promise<Blob | undefined> {
-  return run<Blob | undefined>('readonly', (s) => s.get(id), IMAGES)
+async function blobBytes(blob: Blob): Promise<ArrayBuffer> {
+  if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer()
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result as ArrayBuffer)
+    r.onerror = () => reject(r.error)
+    r.readAsArrayBuffer(blob)
+  })
+}
+
+export async function putImage(id: string, blob: Blob): Promise<void> {
+  askPersist()
+  const rec: StoredImage = { bytes: await blobBytes(blob), type: blob.type || 'image/jpeg' }
+  await run('readwrite', (s) => s.put(rec, id), IMAGES)
+}
+
+export async function getImage(id: string): Promise<Blob | undefined> {
+  const v = await run<StoredImage | Blob | undefined>('readonly', (s) => s.get(id), IMAGES)
+  if (!v) return undefined
+  if (v instanceof Blob) return v
+  if (v && v.bytes) return new Blob([v.bytes], { type: v.type })
+  return undefined
 }
 
 export async function deleteImage(id: string): Promise<void> {

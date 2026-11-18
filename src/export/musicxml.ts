@@ -1,5 +1,9 @@
 import type { Score } from '../types'
-import { DUR_UNITS, effectiveAccidental, letterOf, measureCapacity, meterParts, octaveOf } from '../state/music'
+import { effectiveAccidental, letterOf, measureCapacity, meterParts, noteUnits, octaveOf, TUPLET_NORMAL } from '../state/music'
+
+/** Divisiones por negra: 120 admite puntillos y tresillos, quintillos y seisillos de semicorchea. */
+const DIV = 120
+const dur = (units: number) => Math.round((units * DIV) / 4)
 
 const TYPE: Record<string, string> = { w: 'whole', h: 'half', q: 'quarter', '8': 'eighth', '16': '16th' }
 const esc = (s: string) =>
@@ -31,7 +35,7 @@ export function scoreToMusicXML(score: Score): string {
     out.push(`    <measure number="${mi + 1}">`)
     if (mi === 0) {
       out.push('      <attributes>')
-      out.push('        <divisions>4</divisions>')
+      out.push('        <divisions>${DIV}</divisions>')
       out.push('        <key><fifths>0</fifths></key>')
       out.push(`        <time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time>`)
       out.push('        <clef><sign>G</sign><line>2</line></clef>')
@@ -40,7 +44,7 @@ export function scoreToMusicXML(score: Score): string {
       out.push(`      <direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${score.bpm}</per-minute></metronome></direction-type><sound tempo="${score.bpm}"/></direction>`)
     }
     if (m.length === 0) {
-      out.push(`      <note><rest measure="yes"/><duration>${measureCapacity(meter)}</duration></note>`)
+      out.push(`      <note><rest measure="yes"/><duration>${dur(measureCapacity(meter))}</duration></note>`)
     }
     m.forEach((n, i) => {
       const next = m[i + 1]
@@ -56,16 +60,30 @@ export function scoreToMusicXML(score: Score): string {
         out.push(`          <octave>${octaveOf(n.step)}</octave>`)
         out.push('        </pitch>')
       }
-      out.push(`        <duration>${DUR_UNITS[n.dur]}</duration>`)
+      out.push(`        <duration>${dur(noteUnits(n))}</duration>`)
       out.push(`        <type>${TYPE[n.dur]}</type>`)
+      if (n.dot) out.push('        <dot/>')
+      const t = n.tuplet
+      const tStart = !!t && m[i - 1]?.tuplet?.id !== t.id
+      const tStop = !!t && next?.tuplet?.id !== t.id
+      if (t) {
+        out.push(
+          `        <time-modification><actual-notes>${t.n}</actual-notes><normal-notes>${TUPLET_NORMAL[t.n]}</normal-notes></time-modification>`,
+        )
+      }
+      const tupletTags = [tStart ? '          <tuplet type="start" bracket="yes"/>' : '', tStop ? '          <tuplet type="stop"/>' : ''].filter(Boolean)
+      if (n.kind === 'rest' && tupletTags.length) {
+        out.push('        <notations>', ...tupletTags, '        </notations>')
+      }
       if (n.kind === 'note') {
         if (n.acc === '#') out.push('        <accidental>sharp</accidental>')
         if (n.acc === 'b') out.push('        <accidental>flat</accidental>')
         if (n.acc === 'n') out.push('        <accidental>natural</accidental>')
         const starts = n.slur && next?.kind === 'note'
         const stops = i > 0 && m[i - 1].kind === 'note' && m[i - 1].slur
-        if (n.staccato || n.accent || starts || stops) {
+        if (n.staccato || n.accent || starts || stops || tupletTags.length) {
           out.push('        <notations>')
+          out.push(...tupletTags)
           if (stops) out.push('          <slur type="stop" number="1"/>')
           if (starts) out.push('          <slur type="start" number="1"/>')
           if (n.staccato || n.accent) {

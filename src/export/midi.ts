@@ -37,7 +37,7 @@ export function scoreToMidi(score: Score): Uint8Array {
   const msgs: Msg[] = []
   for (const ev of events) {
     if (ev.midi === null) continue
-    const start = ev.startUnits * UNIT_TICKS
+    const start = Math.round(ev.startUnits * UNIT_TICKS)
     const len = ev.durUnits * UNIT_TICKS * (ev.staccato ? 0.45 : ev.slurToNext ? 1 : 0.94)
     const vel = ev.accent ? 118 : 88
     msgs.push({ tick: start, order: 1, bytes: [0x90, ev.midi & 127, vel] })

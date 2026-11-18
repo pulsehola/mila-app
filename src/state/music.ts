@@ -1,4 +1,4 @@
-import type { Accidental, Duration, Measure, Meter, Note, Transposition } from '../types'
+import type { Accidental, Duration, Measure, Meter, Note, Transposition, TupletKind } from '../types'
 
 /** Unidades de semicorchea por compás 4/4. */
 export const MEASURE_UNITS = 16
@@ -75,8 +75,22 @@ export function makeRest(dur: Duration): Note {
   return makeNote({ dur, kind: 'rest', step: 6 })
 }
 
+/** Cuántas figuras "normales" ocupa un grupo especial: tresillo 3 en 2; quintillo y seisillo en 4. */
+export const TUPLET_NORMAL: Record<TupletKind, number> = { 3: 2, 5: 4, 6: 4 }
+export const TUPLET_LABEL: Record<TupletKind, string> = { 3: 'Tresillo', 5: 'Quintillo', 6: 'Seisillo' }
+
+/** Redondeo para que 3 corcheas de tresillo (4/3 + 4/3 + 4/3) sumen exactamente 4. */
+export const roundUnits = (u: number) => Math.round(u * 1000) / 1000
+
+/** Duración real de una nota en semicorcheas (con puntillo y grupo especial; puede ser fraccionaria). */
+export function noteUnits(n: Pick<Note, 'dur' | 'dot' | 'tuplet'>): number {
+  let u = DUR_UNITS[n.dur] * (n.dot ? 1.5 : 1)
+  if (n.tuplet) u = (u * TUPLET_NORMAL[n.tuplet.n]) / n.tuplet.n
+  return u
+}
+
 export function measureUnits(m: Measure): number {
-  return m.reduce((sum, n) => sum + DUR_UNITS[n.dur], 0)
+  return roundUnits(m.reduce((sum, n) => sum + noteUnits(n), 0))
 }
 
 export interface MeasureStatus {
@@ -87,7 +101,7 @@ export interface MeasureStatus {
 
 export function measureStatus(m: Measure, meter: Meter = DEFAULT_METER): MeasureStatus {
   const units = measureUnits(m)
-  const diff = units - measureCapacity(meter)
+  const diff = roundUnits(units - measureCapacity(meter))
   if (m.length === 0) return { units, diff, state: 'empty' }
   if (diff === 0) return { units, diff, state: 'ok' }
   return { units, diff, state: diff < 0 ? 'short' : 'long' }
@@ -182,7 +196,7 @@ export function buildEvents(
     const m = measures[mi]
     let t = cursor
     m.forEach((n, index) => {
-      const dur = DUR_UNITS[n.dur]
+      const dur = noteUnits(n)
       if (n.kind === 'note') {
         const acc = effectiveAccidental(m, index)
         events.push({
@@ -200,7 +214,7 @@ export function buildEvents(
       t += dur
     })
     // Cada compás ocupa al menos un compás completo para que el cursor y el metrónomo no se desfasen.
-    cursor += Math.max(capacity, t - cursor)
+    cursor += Math.max(capacity, roundUnits(t - cursor))
   }
   return { events, totalUnits: cursor }
 }

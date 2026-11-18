@@ -69,7 +69,7 @@ function fromLabel(label: SymbolLabel, strokes: Stroke[], staff: StaffCtx, score
 /** Como `recognizeCluster`, pero usando también las muestras de la persona (si hizo el test). */
 export function recognizePersonal(strokes: Stroke[], staff: StaffCtx, templates: Template[] = userTemplates()): Recognized {
   const heur = recognizeCluster(strokes, staff)
-  if (templates.length === 0 || heur.kind === 'barline') return heur
+  if (templates.length === 0 || heur.kind === 'barline' || heur.kind === 'dot') return heur
   const tm = matchTemplates(strokes, templates)
   if (!tm || tm.score < TPL_ACCEPT || tm.margin < TPL_MARGIN) return heur
   if (labelOf(heur) === tm.label) return heur
@@ -78,11 +78,15 @@ export function recognizePersonal(strokes: Stroke[], staff: StaffCtx, templates:
   if (heur.kind === 'note' && tm.label.startsWith('note:')) {
     const hollow = (d: string) => d === 'w' || d === 'h'
     if (hollow(heur.dur) !== hollow(tm.label.slice(5))) return heur
+    // Redonda o no lo decide la plica medida (una blanca nunca se lee como redonda, ni al revés).
+    if ((heur.dur === 'w') !== (tm.label === 'note:w')) return heur
   }
   if (heur.kind === 'unknown' || tm.score >= TPL_OVERRIDE) {
     const r = fromLabel(tm.label, strokes, staff, tm.score)
     // Conserva la alteración que las reglas hubieran separado a la izquierda de la cabeza.
-    if (r.kind === 'note' && heur.kind === 'note' && heur.acc) return { ...r, acc: heur.acc }
+    if (r.kind === 'note' && heur.kind === 'note' && (heur.acc || heur.dot)) {
+      return { ...r, ...(heur.acc ? { acc: heur.acc } : {}), ...(heur.dot ? { dot: true } : {}) }
+    }
     return r
   }
   return heur

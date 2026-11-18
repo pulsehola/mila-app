@@ -28,17 +28,14 @@ export const TIME_JOIN_MS = 450
  * (la elipse reducida a la mitad) y se mira si hay trazo cerca: un círculo vacío deja el centro limpio aunque
  * sea pequeño o se haya repasado; una cabeza rellena (garabato, espiral, punto) lo cubre.
  */
-export function headFill(strokes: Stroke[], box: BBox): number {
-  const rx = box.w / 2
-  const ry = box.h / 2
-  if (rx < 3.5 || ry < 3) return 1 // tan pequeña que solo puede ser un punto relleno
-  const reach = Math.max(1.6, Math.min(box.w, box.h) * 0.14)
+/** ¿Hay tinta a menos de `reach` px del punto (x, y)? */
+function inkProbe(strokes: Stroke[], reach: number): (x: number, y: number) => boolean {
   const segs: [Pt, Pt][] = []
   for (const s of strokes) {
     if (s.length === 1) segs.push([s[0], s[0]])
     for (let i = 1; i < s.length; i++) segs.push([s[i - 1], s[i]])
   }
-  const near = (x: number, y: number) =>
+  return (x, y) =>
     segs.some(([a, b]) => {
       const dx = b.x - a.x
       const dy = b.y - a.y
@@ -46,6 +43,13 @@ export function headFill(strokes: Stroke[], box: BBox): number {
       const t = len2 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / len2)) : 0
       return Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy)) <= reach
     })
+}
+
+export function headFill(strokes: Stroke[], box: BBox): number {
+  const rx = box.w / 2
+  const ry = box.h / 2
+  if (rx < 3.5 || ry < 3) return 1 // tan pequeña que solo puede ser un punto relleno
+  const near = inkProbe(strokes, Math.max(1.6, Math.min(box.w, box.h) * 0.14))
   let inside = 0
   let covered = 0
   const N = 9
@@ -65,7 +69,9 @@ export function headFill(strokes: Stroke[], box: BBox): number {
 export const FILLED = 0.4
 
 export type Recognized =
-  | { kind: 'note'; dur: Duration; step: number; x: number; y: number; acc?: Accidental; reason: string }
+  | { kind: 'note'; dur: Duration; step: number; x: number; y: number; acc?: Accidental; dot?: boolean; reason: string }
+  /** Punto suelto (puntillo escrito después): se aplica a la nota que tenga a su izquierda. */
+  | { kind: 'dot'; x: number; y: number; reason: string }
   | { kind: 'rest'; dur: Duration; x: number; y: number; reason: string }
   /** Barra de compás dibujada a mano: se acepta sin hacer nada (los compases ya existen). */
   | { kind: 'barline'; x: number; reason: string }
@@ -138,6 +144,133 @@ function isStemLike(f: Feat): boolean {
   return f.box.h >= 18 && f.box.h / Math.max(f.box.w, 1) >= 2.4 && f.straight >= 0.82
 }
 
+/** Plica a mano algo torcida o corta: más permisiva que isStemLike (solo para buscarla junto a una cabeza). */
+function isLooseStem(f: Feat): boolean {
+  return f.box.h >= 14 && f.box.h / Math.max(f.box.w, 1) >= 1.6 && f.straight >= 0.7
+}
+
+/** Punto pequeño (puntillo, staccato): no es una cabeza aunque sea redondo. */
+function isDot(f: Feat): boolean {
+  return Math.max(f.box.w, f.box.h) <= 6.5 && f.len <= 20
+}
+
+/**
+ * Nota de un trazo sin bucle cerrado (cabeza + plica sin levantar el lápiz): separa la "cola" casi vertical
+ * de uno de los extremos (la plica) del resto (la cabeza).
+ */
+export function splitTail(s: Stroke): { head: Stroke; stem: Stroke } | null {
+  if (s.length < 8) return null
+  const b = bbox(s)
+  if (b.h < 22 || b.h / Math.max(b.w, 1) < 1.3) return null
+  const runFrom = (pts: Pt[]) => {
+    let k = 1
+    for (; k < pts.length; k++) {
+      const dx = Math.abs(pts[k].x - pts[0].x)
+      const dy = Math.abs(pts[k].y - pts[0].y)
+      if (dx > dy * 0.3 + 3) break
+    }
+    return k - 1
+  }
+  const a = runFrom(s)
+  const z = runFrom([...s].reverse())
+  const fromStart = Math.abs(s[a].y - s[0].y) >= Math.abs(s[s.length - 1 - z].y - s[s.length - 1].y)
+  const stem = fromStart ? s.slice(0, a + 1) : s.slice(s.length - 1 - z)
+  const head = fromStart ? s.slice(a) : s.slice(0, s.length - z)
+  if (stem.length < 2 || head.length < 3) return null
+  const hb = bbox(head)
+  if (bbox(stem).h < Math.max(16, b.h * 0.45) || hb.w < 5 || hb.h < 4 || hb.h > b.h * 0.65) return null
+  return { head, stem }
+}
+
+/**
+ * Silencio de redonda / blanca dibujado como bloque (rectángulo relleno, contorno o barra gruesa): ancho, bajo
+ * y con las esquinas entintadas (una cabeza elíptica deja las esquinas vacías). La redonda cuelga de la
+ * 4ª línea (2ª desde arriba); la blanca se apoya sobre la 3ª (la central).
+ */
+function blockRest(feats: Feat[], all: BBox, staff: StaffCtx): Recognized | null {
+  if (all.w < 8 || all.h > STAFF_GAP * 1.15 || all.w / Math.max(all.h, 1) < 1.6) return null
+  if (feats.some((f) => f.box.h >= 14)) return null
+  const near = inkProbe(
+    feats.map((f) => f.s),
+    Math.max(1.8, all.h * 0.22),
+  )
+  const ix = all.w * 0.18
+  const iy = all.h * 0.22
+  const cornersInked = [
+    [all.x0 + ix, all.y0 + iy],
+    [all.x1 - ix, all.y0 + iy],
+    [all.x0 + ix, all.y1 - iy],
+    [all.x1 - ix, all.y1 - iy],
+  ].filter(([x, y]) => near(x, y)).length
+  const thinBar = all.h <= 6
+  if (!thinBar && cornersInked < 3 && all.w / Math.max(all.h, 1) < 2.2) return null
+  const line4 = staff.yTop + STAFF_GAP
+  const line3 = staff.yTop + STAFF_GAP * 2
+  const dWhole = Math.abs(all.y0 - line4)
+  const dHalf = Math.abs(all.y1 - line3)
+  if (Math.min(dWhole, dHalf) > 6) return null
+  const dur: Duration = dWhole <= dHalf ? 'w' : 'h'
+  return {
+    kind: 'rest',
+    dur,
+    x: all.cx,
+    y: all.cy,
+    reason: dur === 'w' ? 'bloque colgado de la 4ª línea (silencio de redonda)' : 'bloque sobre la 3ª línea (silencio de blanca)',
+  }
+}
+
+/**
+ * Silencio de corchea / semicorchea: trazo oblicuo que baja de arriba-derecha a abajo-izquierda, con uno o
+ * dos ganchos (o puntos) a la izquierda de su parte alta. Cada gancho = un corchete: 1 → corchea, 2 → semicorchea.
+ */
+function flagRest(feats: Feat[], all: BBox): Recognized | null {
+  const main = feats.reduce((a, b) => (b.box.h > a.box.h ? b : a))
+  const h = main.box.h
+  if (h < 14 || h > 48 || main.box.w > h * 1.1) return null
+  const s = main.s
+  const T = s.reduce((a, p) => (p.x - p.y > a.x - a.y ? p : a)) // extremo arriba-derecha
+  const B = s.reduce((a, p) => (p.y > a.y ? p : a)) // extremo inferior
+  const span = B.y - T.y
+  if (span < h * 0.6 || T.x - B.x < span * 0.18) return null
+  const xLine = (y: number) => B.x + ((T.x - B.x) * (B.y - y)) / span
+  let hooks = 0
+  let inHook = false
+  let right = 0
+  const thr = Math.max(3, h * 0.12)
+  for (const p of s) {
+    if (p.y >= T.y) right = Math.max(right, p.x - xLine(p.y))
+    if (p.y > B.y - span * 0.3) {
+      inHook = false
+      continue
+    }
+    // Salida hacia la izquierda de la diagonal en su parte alta = un gancho.
+    const left = (p.y < T.y ? T.x : xLine(p.y)) - p.x
+    if (left > thr && !inHook) {
+      hooks++
+      inHook = true
+    } else if (left < thr * 0.4) inHook = false
+  }
+  // Un zig-zag (silencio de negra) se sale mucho también hacia la derecha.
+  if (right > Math.max(4, h * 0.2)) return null
+  // Ganchos como trazos aparte (puntos o ganchitos) a la izquierda de la parte alta.
+  for (const f of feats) {
+    if (f === main) continue
+    if (Math.max(f.box.w, f.box.h) > 13) return null
+    const yRef = Math.min(Math.max(f.box.cy, T.y), B.y)
+    if (f.box.cy > B.y - span * 0.35 || f.box.cx > xLine(yRef) + 2) return null
+    hooks++
+  }
+  if (hooks < 1) return null
+  const dur: Duration = hooks >= 2 ? '16' : '8'
+  return {
+    kind: 'rest',
+    dur,
+    x: all.cx,
+    y: all.cy,
+    reason: dur === '16' ? 'diagonal con dos ganchos (silencio de semicorchea)' : 'diagonal con gancho (silencio de corchea)',
+  }
+}
+
 /** Cabeza = trazo compacto y aproximadamente redondo (círculo vacío o garabato relleno). */
 function isHeadLike(f: Feat): boolean {
   const { w, h } = f.box
@@ -158,7 +291,7 @@ export function splitByHeads(strokes: Stroke[]): Stroke[][] {
   if (strokes.length < 2) return [strokes]
   const feats = strokes.map(feat)
   // Cabeza = trazo de cabeza o nota hecha de un solo trazo (cabeza + plica sin levantar el lápiz).
-  const heads = feats.filter((f) => isHeadLike(f) || isPaddle(f))
+  const heads = feats.filter((f) => (isHeadLike(f) && !isDot(f)) || isPaddle(f) || (f.box.h >= 22 && !!splitTail(f.s)))
   // Cabezas que se solapan (garabato de relleno en varios trazos) cuentan como una.
   const groups: { box: BBox; members: Feat[] }[] = []
   for (const hd of heads) {
@@ -219,6 +352,25 @@ export function recognizeCluster(strokes: Stroke[], staff: StaffCtx): Recognized
   const feats = strokes.map(feat)
   const all = unionBox(feats.map((f) => f.box))
 
+  // Punto(s) sueltos: puntillo escrito después de la nota.
+  if (feats.length <= 2 && feats.every(isDot)) {
+    return { kind: 'dot', x: all.cx, y: all.cy, reason: 'punto pequeño (puntillo)' }
+  }
+  // Figura + punto(s): se reconoce la figura sin los puntos y el punto a su derecha es el puntillo
+  // (un punto encima o debajo, como el staccato, no altera la figura).
+  const dotFeats = feats.filter(isDot)
+  if (dotFeats.length && dotFeats.length < feats.length) {
+    const r = recognizeCluster(
+      feats.filter((f) => !isDot(f)).map((f) => f.s),
+      staff,
+    )
+    // Solo notas: en un silencio de corchea el "punto" es su gancho (lo resuelve flagRest más abajo).
+    if (r.kind === 'note') {
+      const dotted = dotFeats.some((f) => f.box.cx > r.x + 3 && f.box.cx - r.x <= 24 && Math.abs(f.box.cy - r.y) <= 9)
+      return dotted ? { ...r, dot: true, reason: `${r.reason} + puntillo` } : r
+    }
+  }
+
   // 0) Barra de compás: un trazo recto y vertical que cruza casi todo el pentagrama.
   if (feats.length === 1) {
     const f = feats[0]
@@ -254,14 +406,35 @@ export function recognizeCluster(strokes: Stroke[], staff: StaffCtx): Recognized
     }
   }
 
-  // 2) Silencios (un solo trazo, forma característica).
+  // 2) Silencios: bloque (redonda/blanca), diagonal con ganchos (corchea/semicorchea), zig-zag (negra).
+  const block = blockRest(feats, all, staff)
+  if (block) return block
+  const flagged = flagRest(feats, all)
+  if (flagged) return flagged
   if (feats.length === 1) {
     const rest = recognizeRest(feats[0], staff)
     if (rest) return rest
   }
 
+  // 2b) Nota de un trazo sin bucle cerrado: cabeza + plica sin levantar el lápiz (la plica cuenta: blanca, no redonda).
+  if (feats.length === 1) {
+    const parts = splitTail(feats[0].s)
+    if (parts) {
+      const hb = bbox(parts.head)
+      const filled = headFill([parts.head], hb) >= FILLED
+      return {
+        kind: 'note',
+        dur: filled ? 'q' : 'h',
+        step: stepFromY(hb.cy, staff),
+        x: hb.cx,
+        y: hb.cy,
+        reason: filled ? 'cabeza rellena + plica en un trazo (negra)' : 'cabeza hueca + plica en un trazo (blanca)',
+      }
+    }
+  }
+
   // 3) Notas: cabeza (+ plica) (+ corchete).
-  const headCandidates = feats.filter(isHeadLike)
+  const headCandidates = feats.filter((f) => isHeadLike(f) && !isDot(f))
   if (headCandidates.length > 0) {
     // Cabeza = el candidato de mayor caja (si hay dos círculos solapados cuentan como una).
     const headFeat = headCandidates.reduce((a, b) => (b.box.w * b.box.h > a.box.w * a.box.h ? b : a))
@@ -277,21 +450,45 @@ export function recognizeCluster(strokes: Stroke[], staff: StaffCtx): Recognized
     const isFilled = tiny || extraHeads.length > 0 || fill >= FILLED || (ratio >= 2.3 && fill >= 0.22)
 
     let others = feats.filter((f) => f !== headFeat && !extraHeads.includes(f))
+    // Puntillo: punto pequeño a la derecha inmediata de la cabeza, a su altura.
+    const dots = others.filter(
+      (f) => isDot(f) && f.box.cx > merged.x1 - 1 && f.box.x0 - merged.x1 <= 16 && Math.abs(f.box.cy - merged.cy) <= 8,
+    )
+    if (dots.length) others = others.filter((f) => !dots.includes(f))
+    const dotPart = dots.length ? { dot: true } : {}
     // Alteración escrita a la izquierda de la cabeza (sin tocarla).
     const leftStrokes = others.filter((f) => f.box.x1 < merged.x0 - 2 && f.box.cy > merged.cy - 30 && f.box.cy < merged.cy + 30)
     const acc = leftStrokes.length ? recognizeAccidental(leftStrokes.map((f) => f.s)) : null
     if (acc) others = others.filter((f) => !leftStrokes.includes(f))
     const accPart = acc ? { acc } : {}
-    const stem = others.find(
-      (f) =>
-        isStemLike(f) &&
-        f.box.cx >= merged.x0 - 14 &&
-        f.box.cx <= merged.x1 + 14 &&
-        f.box.y0 <= merged.y1 + 14 &&
-        f.box.y1 >= merged.y0 - 14,
-    )
+    // Plica: el trazo vertical más alto pegado a la cabeza (se admite algo torcido: sin ella sería redonda).
+    const stem = others
+      .filter(
+        (f) =>
+          (isStemLike(f) || isLooseStem(f)) &&
+          f.box.cx >= merged.x0 - 14 &&
+          f.box.cx <= merged.x1 + 14 &&
+          f.box.y0 <= merged.y1 + 14 &&
+          f.box.y1 >= merged.y0 - 14,
+      )
+      .sort((a, b) => b.box.h - a.box.h)[0]
     const cy = merged.cy
-    const base = { x: merged.cx, y: cy, step: stepFromY(cy, staff), ...accPart }
+    const base = { x: merged.cx, y: cy, step: stepFromY(cy, staff), ...accPart, ...dotPart }
+
+    // ♭ en dos trazos: palo alto a la IZQUIERDA de una panza pequeña y hueca que cierra abajo
+    // (en una blanca con plica hacia arriba la plica va a la derecha de la cabeza).
+    if (
+      stem &&
+      fill < FILLED &&
+      !dots.length &&
+      merged.w <= 16 &&
+      stem.box.cx <= merged.x0 + merged.w * 0.3 &&
+      stem.box.y0 < merged.y0 - merged.h &&
+      Math.abs(stem.box.y1 - merged.y1) <= 6 &&
+      others.length === 1
+    ) {
+      return { kind: 'accidental', acc: 'b', x: all.cx, y: all.cy, reason: 'palo a la izquierda + panza abajo (♭)' }
+    }
 
     if (!stem) {
       // Atajo de escritura rápida: círculo vacío = redonda, punto/garabato relleno = negra.

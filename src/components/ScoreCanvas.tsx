@@ -10,12 +10,12 @@ import {
   clampStep,
   describeDiff,
   effectiveAccidental,
-  DUR_UNITS,
   makeNote,
   makeRest,
   measureCapacity,
   measureStatus,
   measureUnits,
+  noteUnits,
   newId,
   soundingMidi,
   writtenMidi,
@@ -209,7 +209,7 @@ export function ScoreCanvas(p: Props) {
         ctx.save()
         ctx.globalAlpha = 0.18
         ctx.fillStyle = coral
-        drawStroke(ctx, a.pts, false, false, ERASE_R * 2)
+        drawStroke(ctx, a.pts, false, false, ERASE_R * 2, false)
         ctx.globalAlpha = 0.9
         ctx.strokeStyle = coral
         ctx.lineWidth = 2
@@ -316,6 +316,7 @@ export function ScoreCanvas(p: Props) {
   const readInk = (strokes: Stroke[], l: Layout) => {
     const inserts: Ins[] = []
     const looseAcc: { acc: Exclude<Note['acc'], ''>; x: number; row: number }[] = []
+    const looseDots: { x: number; y: number; row: number }[] = []
     const toAnnotate: Stroke[][] = []
     const slurs: { row: number; x0: number; x1: number }[] = []
     let unknown = 0
@@ -371,6 +372,10 @@ export function ScoreCanvas(p: Props) {
         looseAcc.push({ acc: rec.acc, x: rec.x, row })
         continue
       }
+      if (rec.kind === 'dot') {
+        looseDots.push({ x: rec.x, y: rec.y, row })
+        continue
+      }
       if (rec.kind === 'unknown') {
         // Por encima/debajo del pentagrama o con forma de texto (ancho, varios trazos): anotación.
         const outside = box.y1 < staff.yTop - STAFF_GAP * 1.5 || box.y0 > staff.yBottom + STAFF_GAP * 1.5
@@ -391,11 +396,12 @@ export function ScoreCanvas(p: Props) {
         if (beamsHere >= 2) dur = '16'
         else if (beamsHere === 1 && dur === 'q') dur = '8'
       }
-      const note = rec.kind === 'rest' ? makeRest(dur) : makeNote({ dur, step: rec.step, acc: rec.acc ?? '' })
+      const note =
+        rec.kind === 'rest' ? makeRest(dur) : makeNote({ dur, step: rec.step, acc: rec.acc ?? '', ...(rec.dot ? { dot: true } : {}) })
       inserts.push({ measure: mbox.index, x: rec.x, note, row })
     }
 
-    return { inserts, looseAcc, toAnnotate, unknown, slurs }
+    return { inserts, looseAcc, looseDots, toAnnotate, unknown, slurs }
   }
 
   /** Compás (índice) donde cae un trazo: por el centro de su caja. -1 si está fuera de los pentagramas. */
@@ -427,7 +433,7 @@ export function ScoreCanvas(p: Props) {
     const strokes = pendingRef.current.filter((s) => s.measure === mi).map((s) => s.stroke)
     if (!l || !strokes.length) return { units: done, unknown: 0 }
     const r = readInk(strokes, l)
-    const units = r.inserts.filter((i) => i.measure === mi).reduce((sum, i) => sum + DUR_UNITS[i.note.dur], done)
+    const units = r.inserts.filter((i) => i.measure === mi).reduce((sum, i) => sum + noteUnits(i.note), done)
     return { units, unknown: r.unknown }
   }
 
@@ -475,6 +481,24 @@ export function ScoreCanvas(p: Props) {
       else unknown++
     }
 
+    // Puntillos sueltos: a la nota (o silencio) inmediatamente a su izquierda, nueva o ya escrita.
+    const dotOnExisting = new Set<string>()
+    for (const d of read.looseDots) {
+      const fresh = inserts
+        .filter((i) => i.row === d.row && i.x < d.x && d.x - i.x < 30)
+        .sort((p, q) => q.x - p.x)[0]
+      if (fresh) {
+        fresh.note = { ...fresh.note, dot: true }
+        continue
+      }
+      const rowMeasures = new Set(l.measures.filter((m) => m.row === d.row).map((m) => m.index))
+      const hit = l.notes
+        .filter((n) => rowMeasures.has(n.measure) && n.x < d.x && d.x - n.x < 30 && Math.abs(n.y - d.y) < 14)
+        .sort((p, q) => q.x - p.x)[0]
+      if (hit) dotOnExisting.add(hit.id)
+      else unknown++
+    }
+
     // Ligaduras: une la nota bajo el extremo izquierdo del arco con la del derecho (nuevas o ya escritas).
     const slurOnExisting = new Set<string>()
     for (const s of read.slurs) {
@@ -494,7 +518,7 @@ export function ScoreCanvas(p: Props) {
       else if (left.id) slurOnExisting.add(left.id)
     }
 
-    if (inserts.length > 0 || accOnExisting.size > 0 || slurOnExisting.size > 0) {
+    if (inserts.length > 0 || accOnExisting.size > 0 || slurOnExisting.size > 0 || dotOnExisting.size > 0) {
       const xs = new Map<number, number[]>()
       const xsFor = (mi: number) => {
         if (!xs.has(mi)) xs.set(mi, l.notes.filter((n) => n.measure === mi).sort((a, b) => a.index - b.index).map((n) => n.x))
@@ -502,12 +526,12 @@ export function ScoreCanvas(p: Props) {
       }
       cur.onEdit()
       cur.setMeasures((ms) => {
-        const touched = (n: Note) => accOnExisting.has(n.id) || slurOnExisting.has(n.id)
+        const touched = (n: Note) => accOnExisting.has(n.id) || slurOnExisting.has(n.id) || dotOnExisting.has(n.id)
         const next = ms.map((m) =>
           m.some(touched)
             ? m.map((n) =>
                 touched(n)
-                  ? { ...n, ...(accOnExisting.has(n.id) ? { acc: accOnExisting.get(n.id)! } : {}), ...(slurOnExisting.has(n.id) ? { slur: true } : {}) }
+                  ? { ...n, ...(accOnExisting.has(n.id) ? { acc: accOnExisting.get(n.id)! } : {}), ...(slurOnExisting.has(n.id) ? { slur: true } : {}), ...(dotOnExisting.has(n.id) ? { dot: true } : {}) }
                   : n,
               )
             : m.slice(),
@@ -526,7 +550,7 @@ export function ScoreCanvas(p: Props) {
         cur.onSelect(last.id)
         if (last.kind === 'note') void engine.preview(soundingMidi(writtenMidi(last.step, last.acc), cur.transposition), 260)
       } else {
-        popRef.current = [...accOnExisting.keys(), ...slurOnExisting]
+        popRef.current = [...accOnExisting.keys(), ...slurOnExisting, ...dotOnExisting]
       }
     }
 

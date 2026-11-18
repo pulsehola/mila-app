@@ -11,10 +11,10 @@ function Glyph({ children }: { children: ReactNode }) {
 }
 
 const ITEMS: { name: string; how: string; glyph: ReactNode }[] = [
-  { name: 'Redonda', how: 'Círculo vacío', glyph: <ellipse cx="32" cy="28" rx="10" ry="7" /> },
+  { name: 'Redonda', how: 'Círculo vacío, sin plica', glyph: <ellipse cx="32" cy="28" rx="10" ry="7" /> },
   {
     name: 'Blanca',
-    how: 'Círculo + plica',
+    how: 'Círculo vacío + plica (la plica la distingue de la redonda)',
     glyph: (
       <>
         <ellipse cx="26" cy="38" rx="9" ry="6.5" />
@@ -43,9 +43,45 @@ const ITEMS: { name: string; how: string; glyph: ReactNode }[] = [
     ),
   },
   { name: 'Silencio de negra', how: 'Zig-zag vertical', glyph: <path d="M30 6l10 12-12 12 12 14" /> },
-  { name: 'Silencio de corchea', how: 'Una «7»', glyph: <path d="M24 14h16L30 44" /> },
-  { name: 'Silencio de blanca', how: 'Barra sobre la línea central', glyph: <path d="M20 22h24v6H20z" /> },
-  { name: 'Silencio de redonda', how: 'Barra bajo la 2ª línea desde arriba', glyph: <path d="M20 12h24v6H20z" /> },
+  {
+    name: 'Silencio de corchea',
+    how: 'Diagonal con un gancho (o punto) arriba a la izquierda',
+    glyph: (
+      <>
+        <circle cx="25" cy="15" r="3" fill="currentColor" />
+        <path d="M25 18c5 1 10-1 14-5L28 46" />
+      </>
+    ),
+  },
+  {
+    name: 'Silencio de semicorchea',
+    how: 'La misma diagonal con dos ganchos',
+    glyph: (
+      <>
+        <circle cx="27" cy="11" r="3" fill="currentColor" />
+        <circle cx="23" cy="23" r="3" fill="currentColor" />
+        <path d="M27 14c5 1 9-1 13-5M23 26c5 1 9-1 13-5M40 9L26 50" />
+      </>
+    ),
+  },
+  { name: 'Silencio de blanca', how: 'Bloque relleno apoyado sobre la 3ª línea (la central)', glyph: <path d="M20 22h24v6H20z" fill="currentColor" /> },
+  { name: 'Silencio de redonda', how: 'Bloque relleno colgado de la 4ª línea', glyph: <path d="M20 12h24v6H20z" fill="currentColor" /> },
+  {
+    name: 'Bemol ♭',
+    how: 'Palo alto y una panza cerrada abajo, a su derecha',
+    glyph: <path d="M26 4v42c8-2 14-7 12-12s-8-3-12 1" />,
+  },
+  {
+    name: 'Puntillo',
+    how: 'Un punto a la derecha de la cabeza: suma la mitad del valor',
+    glyph: (
+      <>
+        <ellipse cx="26" cy="34" rx="9" ry="6.5" fill="currentColor" transform="rotate(-20 26 34)" />
+        <path d="M35 34V6" />
+        <circle cx="45" cy="34" r="3" fill="currentColor" />
+      </>
+    ),
+  },
   { name: 'Borrar', how: 'Tacha una nota en zig-zag', glyph: <path d="M10 18l44 6-44 8 44 8" /> },
   {
     name: 'Cambiar tono',
@@ -96,6 +132,11 @@ export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onC
           <li>
             <b>Corcheas y semicorcheas unidas</b>: dibuja las cabezas rellenas con sus plicas y une los extremos con una
             barra (corcheas) o dos (semicorcheas). <b>Ligadura</b>: un arco de una nota a la siguiente.
+          </li>
+          <li>
+            <b>Tresillos, quintillos y seisillos</b>: escribe las notas, toca la primera y pulsa 3, 5 o 6 en la paleta
+            izquierda (agrupa esa nota y las siguientes; tócalo otra vez para deshacerlo). El compás se recalcula solo.
+            El <b>puntillo</b> también está en la paleta (o escribe el punto a la derecha de la cabeza).
           </li>
           <li>Zoom: pellizca con dos dedos (o el trackpad del Mac, o ⌘+ / ⌘−); dos dedos también desplazan la hoja.</li>
           <li>
