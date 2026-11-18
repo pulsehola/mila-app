@@ -1,9 +1,19 @@
-import { motion } from 'framer-motion'
-import { Download, FileMusic, FileText, Loader2, Send } from 'lucide-react'
-import { useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Check, Download, FileImage, FileMusic, FileText, Loader2, MessageCircle, Send } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import type { Score } from '../types'
-import { canNativeShare, downloadScore, FORMAT_INFO, type ExportFormat, shareScore } from '../export/share'
+import {
+  buildFile,
+  canNativeShare,
+  downloadScore,
+  FORMAT_INFO,
+  type ExportFormat,
+  type ShareResult,
+  shareFile,
+  shareScore,
+} from '../export/share'
 import { Modal } from './ui'
+import { ELASTIC } from './springs'
 
 interface Props {
   open: boolean
@@ -12,12 +22,62 @@ interface Props {
   onToast: (m: string, tone?: 'info' | 'warn') => void
 }
 
-const ICONS: Record<ExportFormat, typeof FileText> = { pdf: FileText, midi: FileMusic, xml: FileMusic }
+const ICONS: Record<ExportFormat, typeof FileText> = { pdf: FileText, png: FileImage, midi: FileMusic, xml: FileMusic }
+const WA_GREEN = '#25D366'
+type WaFormat = 'png' | 'pdf'
 
 export function ExportModal({ open, onClose, score, onToast }: Props) {
   const [fmt, setFmt] = useState<ExportFormat>('pdf')
-  const [busy, setBusy] = useState<'download' | 'share' | null>(null)
-  const empty = score.measures.every((m) => m.length === 0)
+  const [waFmt, setWaFmt] = useState<WaFormat>('png')
+  const [busy, setBusy] = useState<'download' | 'share' | 'wa' | null>(null)
+  const empty = score.measures.every((m) => m.length === 0) && !(score.annotations ?? []).length
+
+  // El archivo para WhatsApp se genera al abrir: así el toque abre la hoja de compartir al instante
+  // (Safari solo permite navigator.share justo después del gesto).
+  const [ready, setReady] = useState<{ score: Score; fmt: WaFormat; file: File } | null>(null)
+  const building = useRef<string>('')
+  useEffect(() => {
+    if (!open || empty) return
+    if (ready && ready.score === score && ready.fmt === waFmt) return
+    const key = `${waFmt}:${Date.now()}`
+    building.current = key
+    void buildFile(score, waFmt)
+      .then((file) => {
+        if (building.current === key) setReady({ score, fmt: waFmt, file })
+      })
+      .catch(() => {
+        /* se reintenta al pulsar */
+      })
+  }, [open, empty, score, waFmt, ready])
+  const waFile = ready && ready.score === score && ready.fmt === waFmt ? ready.file : null
+
+  const report = (r: ShareResult) => {
+    if (r === 'shared') onToast('Enviado ✓')
+    else if (r === 'downloaded') onToast('Este navegador no comparte archivos: lo descargué para adjuntarlo.')
+    else if (r === 'blocked') onToast('Listo. Toca otra vez para enviar.')
+  }
+
+  const sendWhatsApp = async () => {
+    if (empty) {
+      onToast('Escribe alguna nota antes de enviar.', 'warn')
+      return
+    }
+    const title = score.title || 'Partitura MILA'
+    if (waFile) {
+      report(await shareFile(waFile, title)) // sin await previo: conserva el gesto
+      return
+    }
+    setBusy('wa')
+    try {
+      const file = await buildFile(score, waFmt)
+      setReady({ score, fmt: waFmt, file })
+      report(await shareFile(file, title))
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : 'No se pudo preparar el archivo', 'warn')
+    } finally {
+      setBusy(null)
+    }
+  }
 
   const run = async (kind: 'download' | 'share') => {
     if (empty) {
@@ -30,9 +90,7 @@ export function ExportModal({ open, onClose, score, onToast }: Props) {
         await downloadScore(score, fmt)
         onToast(`${FORMAT_INFO[fmt].label} descargado ✓`)
       } else {
-        const r = await shareScore(score, fmt)
-        if (r === 'shared') onToast('Compartido ✓')
-        else if (r === 'downloaded') onToast('Tu navegador no comparte archivos: lo descargué.')
+        report(await shareScore(score, fmt))
       }
     } catch (e) {
       onToast(e instanceof Error ? e.message : 'No se pudo exportar', 'warn')
@@ -44,6 +102,73 @@ export function ExportModal({ open, onClose, score, onToast }: Props) {
   return (
     <Modal open={open} onClose={onClose} title="Compartir y exportar" maxWidth={520}>
       <div className="flex flex-col gap-4">
+        {/* WhatsApp: un toque */}
+        <div
+          className="rounded-3xl border-2 p-3"
+          style={{ borderColor: `color-mix(in srgb, ${WA_GREEN} 45%, var(--line))`, background: `color-mix(in srgb, ${WA_GREEN} 8%, var(--paper))` }}
+        >
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-sm font-extrabold">Enviar a un chat</span>
+            <div className="flex rounded-full border border-line bg-panel p-0.5" role="radiogroup" aria-label="Formato para WhatsApp">
+              {(['png', 'pdf'] as const).map((k) => {
+                const on = waFmt === k
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    onClick={() => setWaFmt(k)}
+                    className="relative h-8 rounded-full px-3 text-xs font-extrabold"
+                    style={{ color: on ? '#fff' : 'var(--muted)' }}
+                  >
+                    {on && (
+                      <motion.span
+                        layoutId="wa-pill"
+                        className="absolute inset-0 rounded-full"
+                        style={{ background: WA_GREEN }}
+                        transition={{ type: 'spring', stiffness: 520, damping: 30 }}
+                      />
+                    )}
+                    <span className="relative">{FORMAT_INFO[k].label}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.94 }}
+            whileHover={{ scale: 1.02 }}
+            transition={ELASTIC}
+            disabled={busy !== null}
+            onClick={() => void sendWhatsApp()}
+            className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl text-base font-extrabold text-white shadow-lg disabled:opacity-70"
+            style={{ background: WA_GREEN, boxShadow: `0 10px 24px -12px ${WA_GREEN}` }}
+          >
+            {busy === 'wa' ? <Loader2 size={22} className="animate-spin" /> : <MessageCircle size={22} strokeWidth={2.4} />}
+            Enviar por WhatsApp
+          </motion.button>
+          <div className="mt-2 flex items-center gap-1.5 text-xs text-muted">
+            <AnimatePresence mode="wait" initial={false}>
+              {empty ? (
+                <motion.span key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                  Escribe alguna nota para poder enviarla.
+                </motion.span>
+              ) : waFile ? (
+                <motion.span key="ok" className="flex items-center gap-1" initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                  <Check size={14} style={{ color: WA_GREEN }} /> {FORMAT_INFO[waFmt].label} lista · elige WhatsApp en la hoja de compartir
+                </motion.span>
+              ) : (
+                <motion.span key="prep" className="flex items-center gap-1" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                  <Loader2 size={13} className="animate-spin" /> Preparando {FORMAT_INFO[waFmt].label.toLowerCase()}…
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+
+        <div className="text-[11px] font-bold uppercase tracking-widest text-muted">Otros formatos</div>
         <div className="grid gap-2" role="radiogroup" aria-label="Formato">
           {(Object.keys(FORMAT_INFO) as ExportFormat[]).map((k) => {
             const Icon = ICONS[k]
@@ -56,13 +181,14 @@ export function ExportModal({ open, onClose, score, onToast }: Props) {
                 aria-checked={on}
                 onClick={() => setFmt(k)}
                 whileTap={{ scale: 0.97 }}
-                className="flex items-center gap-3 rounded-2xl border-2 px-4 py-3 text-left"
+                transition={ELASTIC}
+                className="flex items-center gap-3 rounded-2xl border-2 px-4 py-2.5 text-left"
                 style={{
                   borderColor: on ? 'var(--coral)' : 'var(--line)',
                   background: on ? 'color-mix(in srgb, var(--coral) 12%, var(--panel))' : 'var(--paper)',
                 }}
               >
-                <Icon size={26} />
+                <Icon size={24} />
                 <span className="flex-1">
                   <span className="block text-base font-extrabold">{FORMAT_INFO[k].label}</span>
                   <span className="block text-xs text-muted">{FORMAT_INFO[k].hint}</span>
@@ -82,9 +208,10 @@ export function ExportModal({ open, onClose, score, onToast }: Props) {
           <motion.button
             type="button"
             whileTap={{ scale: 0.95 }}
+            transition={ELASTIC}
             disabled={busy !== null}
             onClick={() => void run('download')}
-            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl border border-line bg-paper px-4 font-black disabled:opacity-60"
+            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl border border-line bg-paper px-4 font-extrabold disabled:opacity-60"
           >
             {busy === 'download' ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
             Descargar {FORMAT_INFO[fmt].label}
@@ -92,9 +219,10 @@ export function ExportModal({ open, onClose, score, onToast }: Props) {
           <motion.button
             type="button"
             whileTap={{ scale: 0.95 }}
+            transition={ELASTIC}
             disabled={busy !== null}
             onClick={() => void run('share')}
-            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl bg-coral px-4 font-black text-white disabled:opacity-60"
+            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl bg-coral px-4 font-extrabold text-white disabled:opacity-60"
           >
             {busy === 'share' ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
             Compartir…
@@ -103,8 +231,9 @@ export function ExportModal({ open, onClose, score, onToast }: Props) {
         <p className="text-xs text-muted">
           {canNativeShare()
             ? 'Compartir abre la hoja del sistema: AirDrop, WhatsApp, Mensajes, Archivos…'
-            : 'Este navegador no tiene hoja de compartir nativa; “Compartir” descargará el archivo.'}
-          {score.transposition === 'Bb' && fmt !== 'pdf' ? ' El MIDI suena en altura real; el MusicXML conserva la transposición a Sib.' : ''}
+            : 'Este navegador no tiene hoja de compartir nativa; se descargará el archivo.'}
+          {' Las anotaciones a mano salen en PDF e imagen.'}
+          {score.transposition === 'Bb' && (fmt === 'midi' || fmt === 'xml') ? ' El MIDI suena en altura real; el MusicXML conserva la transposición a Sib.' : ''}
         </p>
       </div>
     </Modal>

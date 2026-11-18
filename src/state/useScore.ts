@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Measure, Score } from '../types'
+import type { Annotation, Measure, Score } from '../types'
 import { emptyScore } from './examples'
 import { MEASURE_UNITS, measureUnits } from './music'
 
@@ -18,7 +18,18 @@ export function normalizeScore(raw: unknown): Score | null {
     ['w', 'h', 'q', '8'].includes((n as { dur: string }).dur) &&
     ['note', 'rest'].includes((n as { kind: string }).kind)
   const measures = s.measures.slice(0, MAX_MEASURES).map((m) => (Array.isArray(m) ? m.filter(okNote) : []))
+  const okAnnot = (a: unknown): a is Annotation =>
+    !!a &&
+    typeof a === 'object' &&
+    typeof (a as Annotation).id === 'string' &&
+    Number.isInteger((a as Annotation).measure) &&
+    (a as Annotation).measure >= 0 &&
+    (a as Annotation).measure < measures.length &&
+    [(a as Annotation).ax, (a as Annotation).ay, (a as Annotation).w0].every((v) => typeof v === 'number' && Number.isFinite(v)) &&
+    Array.isArray((a as Annotation).strokes)
+  const annotations = Array.isArray(s.annotations) ? s.annotations.filter(okAnnot) : []
   return {
+    annotations,
     title: typeof s.title === 'string' ? s.title : 'Sin título',
     bpm: typeof s.bpm === 'number' ? Math.max(30, Math.min(240, Math.round(s.bpm))) : 96,
     transposition: s.transposition === 'C' ? 'C' : 'Bb',
@@ -48,12 +59,19 @@ function withTrailingMeasure(measures: Measure[]): Measure[] {
   return measures
 }
 
+/** Instantánea del historial: deshacer cubre notas y anotaciones. */
+interface Snap {
+  measures: Measure[]
+  annotations: Annotation[]
+}
+
 export interface ScoreApi {
   score: Score
   canUndo: boolean
   canRedo: boolean
   /** Reemplaza los compases. `record=false` aplica un cambio transitorio (p.ej. arrastre) sin historial. */
   setMeasures: (fn: (m: Measure[]) => Measure[], record?: boolean) => void
+  setAnnotations: (fn: (a: Annotation[]) => Annotation[], record?: boolean) => void
   patch: (p: Partial<Pick<Score, 'bpm' | 'transposition' | 'title'>>) => void
   replace: (s: Score) => void
   undo: () => void
@@ -65,11 +83,18 @@ export interface ScoreApi {
 
 export function useScore(): ScoreApi {
   const [score, setScore] = useState<Score>(load)
-  const undoRef = useRef<Measure[][]>([])
-  const redoRef = useRef<Measure[][]>([])
+  const undoRef = useRef<Snap[]>([])
+  const redoRef = useRef<Snap[]>([])
   const [, force] = useState(0)
   const scoreRef = useRef(score)
   scoreRef.current = score
+
+  const snap = (): Snap => ({ measures: scoreRef.current.measures, annotations: scoreRef.current.annotations ?? [] })
+  const push = (s: Snap) => {
+    undoRef.current.push(s)
+    if (undoRef.current.length > HISTORY_LIMIT) undoRef.current.shift()
+    redoRef.current = []
+  }
 
   // Autoguardado con debounce.
   useEffect(() => {
@@ -87,12 +112,22 @@ export function useScore(): ScoreApi {
     const prev = scoreRef.current.measures
     const next = withTrailingMeasure(fn(prev))
     if (next === prev) return
-    if (record) {
-      undoRef.current.push(prev)
-      if (undoRef.current.length > HISTORY_LIMIT) undoRef.current.shift()
-      redoRef.current = []
-    }
-    setScore((s) => ({ ...s, measures: next }))
+    if (record) push(snap())
+    // Las anotaciones de compases que desaparecen se descartan.
+    const ann = scoreRef.current.annotations ?? []
+    const keep = ann.every((a) => a.measure < next.length) ? ann : ann.filter((a) => a.measure < next.length)
+    scoreRef.current = { ...scoreRef.current, measures: next, annotations: keep }
+    setScore((s) => ({ ...s, measures: next, annotations: keep }))
+    force((n) => n + 1)
+  }, [])
+
+  const setAnnotations = useCallback((fn: (a: Annotation[]) => Annotation[], record = true) => {
+    const prev = scoreRef.current.annotations ?? []
+    const next = fn(prev)
+    if (next === prev) return
+    if (record) push(snap())
+    scoreRef.current = { ...scoreRef.current, annotations: next }
+    setScore((s) => ({ ...s, annotations: next }))
     force((n) => n + 1)
   }, [])
 
@@ -101,8 +136,8 @@ export function useScore(): ScoreApi {
   }, [])
 
   const replace = useCallback((s: Score) => {
-    undoRef.current.push(scoreRef.current.measures)
-    redoRef.current = []
+    push(snap())
+    scoreRef.current = s
     setScore(s)
     force((n) => n + 1)
   }, [])
@@ -110,16 +145,18 @@ export function useScore(): ScoreApi {
   const undo = useCallback(() => {
     const prev = undoRef.current.pop()
     if (!prev) return
-    redoRef.current.push(scoreRef.current.measures)
-    setScore((s) => ({ ...s, measures: prev }))
+    redoRef.current.push(snap())
+    scoreRef.current = { ...scoreRef.current, ...prev }
+    setScore((s) => ({ ...s, ...prev }))
     force((n) => n + 1)
   }, [])
 
   const redo = useCallback(() => {
     const next = redoRef.current.pop()
     if (!next) return
-    undoRef.current.push(scoreRef.current.measures)
-    setScore((s) => ({ ...s, measures: next }))
+    undoRef.current.push(snap())
+    scoreRef.current = { ...scoreRef.current, ...next }
+    setScore((s) => ({ ...s, ...next }))
     force((n) => n + 1)
   }, [])
 
@@ -140,6 +177,7 @@ export function useScore(): ScoreApi {
     canUndo: undoRef.current.length > 0,
     canRedo: redoRef.current.length > 0,
     setMeasures,
+    setAnnotations,
     patch,
     replace,
     undo,

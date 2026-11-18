@@ -5,7 +5,9 @@ import { createTapTempo, engine } from './audio/engine'
 import { ArticulationPalette } from './components/ArticulationPalette'
 import { ExportModal } from './components/ExportModal'
 import { HelpModal } from './components/HelpModal'
+import { ModeSwitch } from './components/ModeSwitch'
 import { ScoreCanvas } from './components/ScoreCanvas'
+import { Splash } from './components/Splash'
 import { TopBar } from './components/TopBar'
 import { type TransportHandle, TransportBar } from './components/TransportBar'
 import { Tuner } from './components/Tuner'
@@ -19,9 +21,11 @@ import {
   writtenMidi,
 } from './state/music'
 import { useScore } from './state/useScore'
-import type { LoopRange, Note, Transposition } from './types'
+import type { EditMode, LoopRange, Note, Transposition } from './types'
 
 type Modal = 'tuner' | 'export' | 'help' | null
+
+const NO_ANNOTATIONS: never[] = []
 
 export default function App() {
   const api = useScore()
@@ -37,6 +41,7 @@ export default function App() {
   const [loopRange, setLoopRange] = useState<LoopRange | null>(null)
   const [modal, setModal] = useState<Modal>(null)
   const [fingerDraw, setFingerDraw] = useState(false)
+  const [mode, setModeState] = useState<EditMode>('notes')
   const [toast, setToast] = useState<{ msg: string; tone: 'info' | 'warn' } | null>(null)
   const transportRef = useRef<TransportHandle>(null)
   const toastTimer = useRef(0)
@@ -46,13 +51,18 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
     localStorage.setItem('mila:theme', dark ? 'dark' : 'light')
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#1d1a2e' : '#fff6e3')
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#12101d' : '#fff1d6')
   }, [dark])
 
   const showToast = useCallback((msg: string, tone: 'info' | 'warn' = 'info') => {
     setToast({ msg, tone })
     window.clearTimeout(toastTimer.current)
     toastTimer.current = window.setTimeout(() => setToast(null), 2600)
+  }, [])
+
+  const setMode = useCallback((m: EditMode) => {
+    setModeState(m)
+    if (m === 'annotate') setSelectedId(null)
   }, [])
 
   // ---- Motor de audio ------------------------------------------------------
@@ -255,6 +265,7 @@ export default function App() {
     staccato: () => onToggle('staccato'),
     accent: () => onToggle('accent'),
     slur: () => onToggle('slur'),
+    mode: () => setMode(mode === 'notes' ? 'annotate' : 'notes'),
   }
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -295,6 +306,8 @@ export default function App() {
           return run('accent')
         case 'l':
           return run('slur')
+        case 'm':
+          return run('mode')
       }
     }
     const up = (e: KeyboardEvent) => {
@@ -359,12 +372,18 @@ export default function App() {
             loopMode={loopOn}
             loopRange={loopOn ? loopRange : null}
             fingerDraw={fingerDraw}
+            mode={mode}
+            annotations={score.annotations ?? NO_ANNOTATIONS}
             setMeasures={api.setMeasures}
+            setAnnotations={api.setAnnotations}
             onSelect={setSelectedId}
             onBadge={onBadge}
             onToast={showToast}
             onEdit={stopPlayback}
           />
+          <div className="pointer-events-none absolute bottom-3 left-4 z-30">
+            <ModeSwitch mode={mode} onMode={setMode} />
+          </div>
           <div className="pointer-events-none absolute bottom-3 right-4 z-30 flex gap-2">
             <button
               type="button"
@@ -405,6 +424,7 @@ export default function App() {
       <ExportModal open={modal === 'export'} onClose={() => setModal(null)} score={score} onToast={showToast} />
       <HelpModal open={modal === 'help'} onClose={() => setModal(null)} />
       <Toast msg={toast?.msg ?? null} tone={toast?.tone ?? 'info'} />
+      <Splash />
     </div>
   )
 }

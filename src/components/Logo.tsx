@@ -1,14 +1,21 @@
 import { motion } from 'framer-motion'
 
+/** Colores fijos de la marca (también en el icono de la app). */
+const BRAND = { mi: '#2fd3a6', la: '#f2b33d', ink: '#1d1a2e' }
+
 interface Props {
   size?: number
   /** Cuando suena la música las ondas aceleran. */
   playing?: boolean
 }
 
-/** Logo MILA: una "M" de trazo redondeado con ondas musicales que respiran. */
+/**
+ * Isotipo MI-LA: dos corcheas unidas sobre un pentagrama. La de abajo es un MI (primera línea, verde menta)
+ * y la de arriba un LA (segundo espacio, latón). Las ondas respiran y aceleran al reproducir.
+ */
 export function Logo({ size = 40, playing = false }: Props) {
   const speed = playing ? 0.9 : 2.4
+  const spring = { type: 'spring' as const, stiffness: 520, damping: 13 }
   return (
     <motion.svg
       width={size}
@@ -16,39 +23,90 @@ export function Logo({ size = 40, playing = false }: Props) {
       viewBox="0 0 64 64"
       role="img"
       aria-label="MILA"
-      whileTap={{ scale: 0.92, rotate: -6 }}
+      whileTap={{ scale: 0.9, rotate: -6 }}
       transition={{ type: 'spring', stiffness: 500, damping: 14 }}
     >
-      <defs>
-        <linearGradient id="logo-bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#ff8a5c" />
-          <stop offset="1" stopColor="#ff5a7a" />
-        </linearGradient>
-      </defs>
-      <rect width="64" height="64" rx="18" fill="url(#logo-bg)" />
+      <rect width="64" height="64" rx="18" fill={BRAND.ink} />
+      {[22, 28, 34, 40, 46].map((y) => (
+        <line key={y} x1="9" x2="55" y1={y} y2={y} stroke="#fff6e3" strokeOpacity="0.16" strokeWidth="1.4" />
+      ))}
+      {/* Plicas + barra */}
       <motion.path
-        d="M15 47V19l13.5 19L42 19v28"
-        fill="none"
+        d="M26.4 45V17.5M43.4 36V14.5"
         stroke="#fff6e3"
-        strokeWidth="6.5"
+        strokeWidth="2.6"
         strokeLinecap="round"
-        strokeLinejoin="round"
         initial={{ pathLength: 0 }}
         animate={{ pathLength: 1 }}
-        transition={{ duration: 0.9, ease: 'easeOut' }}
+        transition={{ duration: 0.45, delay: 0.35, ease: 'easeOut' }}
       />
-      {[0, 1, 2].map((i) => (
+      <motion.path
+        d="M26.4 17.5L43.4 14.5"
+        stroke="#fff6e3"
+        strokeWidth="5"
+        strokeLinecap="round"
+        initial={{ pathLength: 0 }}
+        animate={{ pathLength: 1 }}
+        transition={{ duration: 0.35, delay: 0.7, ease: 'easeOut' }}
+      />
+      {/* MI (primera línea) y LA (segundo espacio) */}
+      <motion.ellipse
+        cx="22"
+        cy="46"
+        rx="5.4"
+        ry="4"
+        transform="rotate(-22 22 46)"
+        fill={BRAND.mi}
+        initial={{ scale: 0 }}
+        animate={{ scale: 1 }}
+        transition={{ ...spring, delay: 0.05 }}
+        style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
+      />
+      <motion.ellipse
+        cx="39"
+        cy="37"
+        rx="5.4"
+        ry="4"
+        transform="rotate(-22 39 37)"
+        fill={BRAND.la}
+        initial={{ scale: 0 }}
+        animate={{ scale: 1 }}
+        transition={{ ...spring, delay: 0.2 }}
+        style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
+      />
+      {[0, 1].map((i) => (
         <motion.path
           key={i}
-          d={`M${47 + i * 4.5} ${26 - i * 2.5}q${3 + i} ${6 + i * 2.5} 0 ${12 + i * 5}`}
+          d={`M${50 + i * 4} ${30 - i * 3}q${2.6 + i} ${5 + i * 2.5} 0 ${10 + i * 5}`}
           fill="none"
-          stroke="#ffe08a"
-          strokeWidth="3"
+          stroke={i === 0 ? BRAND.mi : BRAND.la}
+          strokeWidth="2.4"
           strokeLinecap="round"
           animate={{ opacity: [0.15, 1, 0.15], x: [-1, 1.5, -1] }}
-          transition={{ duration: speed, repeat: Infinity, delay: i * (speed / 6), ease: 'easeInOut' }}
+          transition={{ duration: speed, repeat: Infinity, delay: i * (speed / 5), ease: 'easeInOut' }}
         />
       ))}
     </motion.svg>
+  )
+}
+
+/** Logotipo "MILA": MI en verde menta, LA en latón. Las sílabas entran como dos notas. */
+export function Wordmark({ className = '', animate = true }: { className?: string; animate?: boolean }) {
+  const syl = (text: string, color: string, delay: number) => (
+    <motion.span
+      className="inline-block"
+      style={{ color }}
+      initial={animate ? { y: 10, opacity: 0, scale: 0.8 } : false}
+      animate={{ y: 0, opacity: 1, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 480, damping: 16, delay }}
+    >
+      {text}
+    </motion.span>
+  )
+  return (
+    <span className={`inline-flex font-extrabold tracking-tight ${className}`} aria-label="MILA">
+      {syl('MI', 'var(--mi)', 0.1)}
+      {syl('LA', 'var(--la)', 0.25)}
+    </span>
   )
 }

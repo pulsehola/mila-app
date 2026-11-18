@@ -79,10 +79,16 @@ export function HelpModal({ open, onClose }: { open: boolean; onClose: () => voi
           <li>Escribe con el Apple Pencil; apoya la mano con tranquilidad: los dedos no dibujan. Dos dedos hacen scroll.</li>
           <li>La nota se coloca por la altura de la cabeza: líneas y espacios de la clave de Sol.</li>
           <li>Tras escribir, la nota queda seleccionada: usa ♯ ♭ ♮, staccato, acento o ligadura en la paleta izquierda.</li>
+          <li>Escribe a tu ritmo: cabeza, plica y corchete se agrupan solos. La nota aparece tras ~0,6 s sin tocar la pantalla.</li>
+          <li>
+            Modo <b>Anotar</b> (abajo a la izquierda): textos como “ENTRA DIRECTO”, flechas o recuadros se guardan tal cual, en
+            azul, pegados a su compás. Tacha en zig-zag por encima para borrarlos. También salen en el PDF y la imagen.
+          </li>
           <li>El punto junto a cada compás avisa si faltan o sobran tiempos (4/4).</li>
           <li>
             Mac: <kbd>Espacio</kbd> play/pausa · <kbd>⌘Z</kbd> deshacer · <kbd>⇧⌘Z</kbd> rehacer · <kbd>⌫</kbd> borra la nota · <kbd>↑ ↓</kbd> tono ·{' '}
-            <kbd>← →</kbd> navegar · <kbd>#</kbd> <kbd>b</kbd> <kbd>n</kbd> alteraciones · <kbd>S</kbd> staccato · <kbd>A</kbd> acento · <kbd>L</kbd> ligadura
+            <kbd>← →</kbd> navegar · <kbd>#</kbd> <kbd>b</kbd> <kbd>n</kbd> alteraciones · <kbd>S</kbd> staccato · <kbd>A</kbd> acento · <kbd>L</kbd> ligadura ·{' '}
+            <kbd>M</kbd> Notas/Anotar
           </li>
         </ul>
       </div>

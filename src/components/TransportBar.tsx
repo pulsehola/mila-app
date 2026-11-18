@@ -2,6 +2,7 @@ import { motion, useAnimationControls } from 'framer-motion'
 import { Metronome as MetronomeIcon, Minus, Pause, Play, Plus, Repeat, Square } from 'lucide-react'
 import { forwardRef, useImperativeHandle } from 'react'
 import { IconButton } from './ui'
+import { ELASTIC } from './springs'
 
 export interface TransportHandle {
   pulse: () => void
@@ -87,6 +88,7 @@ export const TransportBar = forwardRef<TransportHandle, Props>(function Transpor
           aria-label="Tap tempo"
           onClick={p.onTap}
           whileTap={{ scale: 0.86, rotate: -4 }}
+          transition={ELASTIC}
           className="h-11 rounded-2xl bg-sun px-4 text-sm font-black text-[#2b2118]"
         >
           TAP

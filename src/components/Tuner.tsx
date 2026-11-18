@@ -5,6 +5,7 @@ import { detectPitch, noteLabel, readingFromFreq } from '../audio/pitch'
 import { midiName, midiOctave } from '../state/music'
 import type { Transposition } from '../types'
 import { IconButton, Modal } from './ui'
+import { ELASTIC } from './springs'
 
 interface Props {
   open: boolean
@@ -181,6 +182,7 @@ export function Tuner({ open, onClose, transposition }: Props) {
         <motion.button
           type="button"
           whileTap={{ scale: 0.94 }}
+          transition={ELASTIC}
           onClick={() => (state === 'live' ? stop() : void start())}
           className="flex h-12 items-center gap-2 rounded-2xl bg-coral px-5 font-black text-white"
         >

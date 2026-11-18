@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@fontsource-variable/plus-jakarta-sans";
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
@@ -15,6 +16,11 @@
   --warn: #ff9f1c;
   --bad: #e5484d;
   --good: #2fc9a0;
+  /* Marca MI-LA: MI = verde menta, LA = latón/ámbar */
+  --mi: #10b88a;
+  --la: #d99a1e;
+  /* Capa de anotaciones a mano alzada (lápiz azul) */
+  --annot: #2f62d6;
 }
 .dark {
   --bg: #12101d;
@@ -30,6 +36,9 @@
   --warn: #ffb347;
   --bad: #ff6b70;
   --good: #4be0b8;
+  --mi: #4be0b8;
+  --la: #f2b93b;
+  --annot: #8fb0ff;
 }
 
 @theme inline {
@@ -45,12 +54,19 @@
   --color-sky: var(--sky);
   --color-warn: var(--warn);
   --color-bad: var(--bad);
-  --font-sans: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --color-mi: var(--mi);
+  --color-la: var(--la);
+  --color-annot: var(--annot);
+  --font-sans: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 html,
 body {
   height: 100%;
+  /* Sin rebote elástico de Safari: la página nunca se desplaza, solo el lienzo (sin overscroll). */
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
 }
 #root {
   height: 100%;
@@ -62,6 +78,7 @@ body {
   color: var(--ink);
   font-family: var(--font-sans);
   overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
@@ -91,4 +108,12 @@ button {
   0%, 100% { transform: translateX(0); }
   25% { transform: translateX(-6px); }
   75% { transform: translateX(6px); }
+}
+
+/* Reducir movimiento si el sistema lo pide */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -15,12 +15,18 @@ function pathFromOutline(points: number[][]): Path2D {
 }
 
 /** Dibuja un trazo con grosor dinámico (presión del Pencil; en ratón simula presión por velocidad). */
-export function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, pressure: boolean, done: boolean): void {
+export function drawStroke(
+  ctx: CanvasRenderingContext2D,
+  stroke: Stroke,
+  pressure: boolean,
+  done: boolean,
+  size?: number,
+): void {
   if (stroke.length === 0) return
   const outline = getStroke(
     stroke.map((p) => [p.x, p.y, p.p]),
     {
-      size: pressure ? 7 : 5.5,
+      size: size ?? (pressure ? 7 : 5.5),
       thinning: 0.62,
       smoothing: 0.55,
       streamline: 0.42,

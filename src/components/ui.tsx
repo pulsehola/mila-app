@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { X } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { ELASTIC } from './springs'
 
 /** Botón táctil de tamaño cómodo (≥44 px) sin depender de :hover. */
 export function IconButton({
@@ -39,8 +40,9 @@ export function IconButton({
       aria-pressed={active}
       disabled={disabled}
       onClick={onClick}
-      whileTap={{ scale: 0.88 }}
-      transition={{ type: 'spring', stiffness: 600, damping: 18 }}
+      whileTap={{ scale: 0.84, rotate: -3 }}
+      whileHover={{ scale: 1.05, y: -1 }}
+      transition={ELASTIC}
       className={`grid shrink-0 place-items-center rounded-2xl border border-line text-lg font-bold shadow-sm disabled:opacity-35 ${className}`}
       style={{ width: size, height: size, background: bg, color: active && tone === 'coral' ? '#fff' : fg }}
     >

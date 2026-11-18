@@ -3,8 +3,9 @@ import { CircleHelp, Hand, Library, Mic, Moon, Redo2, Share2, Sun, Undo2 } from 
 import { useState } from 'react'
 import type { Transposition } from '../types'
 import { EXAMPLES } from '../state/examples'
-import { Logo } from './Logo'
+import { Logo, Wordmark } from './Logo'
 import { IconButton } from './ui'
+import { ELASTIC } from './springs'
 
 interface Props {
   title: string
@@ -36,7 +37,7 @@ export function TopBar(p: Props) {
       <div className="flex items-center gap-2">
         <Logo size={44} playing={p.playing} />
         <div className="leading-none">
-          <div className="text-xl font-black tracking-tight">MILA</div>
+          <Wordmark className="text-[22px]" />
           <div className="text-[10px] font-bold uppercase tracking-widest text-muted">partituras a mano</div>
         </div>
       </div>
@@ -158,6 +159,7 @@ export function TopBar(p: Props) {
           type="button"
           onClick={p.onExport}
           whileTap={{ scale: 0.92 }}
+          transition={ELASTIC}
           className="flex h-11 items-center gap-2 rounded-2xl bg-coral px-4 text-sm font-black text-white shadow"
         >
           <Share2 size={18} /> Compartir
