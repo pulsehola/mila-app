@@ -1,5 +1,6 @@
 import * as Tone from 'tone'
-import { MEASURE_UNITS, midiToFreq, type PlayEvent } from '../state/music'
+import { DEFAULT_METER, meterParts, midiToFreq, type PlayEvent } from '../state/music'
+import type { Meter } from '../types'
 
 const PPQ = 192 // ticks por negra en Tone.Transport
 const TICKS_PER_UNIT = PPQ / 4 // 1 unidad = semicorchea
@@ -27,6 +28,7 @@ export class AudioEngine {
   private metronomeOn = false
   private scoreActive = false
   private beatCounter = 0
+  private meter: Meter = DEFAULT_METER
 
   onCursor: Listener<{ noteId: string; measure: number; index: number } | null> = null
   onBeat: Listener<number> = null
@@ -95,6 +97,15 @@ export class AudioEngine {
     Tone.getTransport().bpm.rampTo(bpm, 0.05)
   }
 
+  /** Métrica para el metrónomo: en x/4 marca negras; en 6/8, corcheas (acento en 1 y en 4). */
+  setMeter(meter: Meter): void {
+    this.meter = meter
+  }
+
+  private get beatNote(): '4n' | '8n' {
+    return meterParts(this.meter).beatType === 8 ? '8n' : '4n'
+  }
+
   setMetronome(on: boolean): void {
     this.metronomeOn = on
   }
@@ -110,7 +121,7 @@ export class AudioEngine {
     const tr = Tone.getTransport()
     tr.bpm.value = bpm
     this.beatCounter = 0
-    tr.scheduleRepeat((time) => this.tickBeat(time), '4n', 0)
+    tr.scheduleRepeat((time) => this.tickBeat(time), this.beatNote, 0)
     tr.start('+0.05')
   }
 
@@ -139,7 +150,7 @@ export class AudioEngine {
       }, `${ticks}i`)
     }
 
-    tr.scheduleRepeat((time) => this.tickBeat(time), '4n', 0)
+    tr.scheduleRepeat((time) => this.tickBeat(time), this.beatNote, 0)
 
     const endTicks = opts.totalUnits * TICKS_PER_UNIT
     if (opts.loop) {
@@ -158,11 +169,14 @@ export class AudioEngine {
   }
 
   private tickBeat(time: number): void {
-    const beatsPerBar = MEASURE_UNITS / 4
+    const { beats: beatsPerBar } = meterParts(this.meter)
     const beatInBar = this.beatCounter % beatsPerBar
     this.beatCounter += 1
     if (this.metronomeOn) {
-      this.click.triggerAttackRelease(beatInBar === 0 ? 'A5' : 'E5', '32n', time, beatInBar === 0 ? 1 : 0.6)
+      // 6/8: dos tiempos de tres corcheas; la 4ª corchea lleva un acento secundario.
+      const strong = beatInBar === 0
+      const second = this.meter === '6/8' && beatInBar === 3
+      this.click.triggerAttackRelease(strong ? 'A5' : second ? 'C#5' : 'E5', '32n', time, strong ? 1 : second ? 0.8 : 0.6)
     }
     const idx = this.beatCounter - 1
     Tone.getDraw().schedule(() => this.onBeat?.(idx), time)

@@ -1,5 +1,5 @@
 import type { Score } from '../types'
-import { DUR_UNITS, effectiveAccidental, letterOf, octaveOf } from '../state/music'
+import { DUR_UNITS, effectiveAccidental, letterOf, measureCapacity, meterParts, octaveOf } from '../state/music'
 
 const TYPE: Record<string, string> = { w: 'whole', h: 'half', q: 'quarter', '8': 'eighth', '16': '16th' }
 const esc = (s: string) =>
@@ -25,20 +25,22 @@ export function scoreToMusicXML(score: Score): string {
   )
   out.push('  </part-list>')
   out.push('  <part id="P1">')
+  const meter = score.meter ?? '4/4'
+  const { beats, beatType } = meterParts(meter)
   score.measures.forEach((m, mi) => {
     out.push(`    <measure number="${mi + 1}">`)
     if (mi === 0) {
       out.push('      <attributes>')
       out.push('        <divisions>4</divisions>')
       out.push('        <key><fifths>0</fifths></key>')
-      out.push('        <time><beats>4</beats><beat-type>4</beat-type></time>')
+      out.push(`        <time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time>`)
       out.push('        <clef><sign>G</sign><line>2</line></clef>')
       if (bb) out.push('        <transpose><diatonic>-1</diatonic><chromatic>-2</chromatic></transpose>')
       out.push('      </attributes>')
       out.push(`      <direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${score.bpm}</per-minute></metronome></direction-type><sound tempo="${score.bpm}"/></direction>`)
     }
     if (m.length === 0) {
-      out.push('      <note><rest measure="yes"/><duration>16</duration></note>')
+      out.push(`      <note><rest measure="yes"/><duration>${measureCapacity(meter)}</duration></note>`)
     }
     m.forEach((n, i) => {
       const next = m[i + 1]

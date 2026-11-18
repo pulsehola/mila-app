@@ -113,7 +113,21 @@ async function pdfToScan(file: File): Promise<ScanResult> {
     throw new Error('No se pudo cargar el lector de PDF. Comprueba la conexión la primera vez y vuelve a intentarlo.')
   }
   const data = new Uint8Array(await file.arrayBuffer())
-  const task = pdfjs.getDocument({ data, useSystemFonts: true })
+  const base = `${import.meta.env.BASE_URL}pdfjs/`
+  const task = pdfjs.getDocument({
+    data,
+    useSystemFonts: true,
+    // Decodificadores JPEG 2000 / JBIG2 (wasm): sin ellos no se dibujan las páginas escaneadas.
+    wasmUrl: `${base}wasm/`,
+    standardFontDataUrl: `${base}standard_fonts/`,
+    cMapUrl: `${base}cmaps/`,
+    cMapPacked: true,
+    iccUrl: `${base}iccs/`,
+    // Safari del iPad: OffscreenCanvas e ImageDecoder dan resultados irregulares; se usan los decodificadores
+    // propios de pdf.js, más lentos pero fiables.
+    isOffscreenCanvasSupported: false,
+    isImageDecoderSupported: false,
+  })
   let doc: Awaited<typeof task.promise>
   try {
     doc = await task.promise

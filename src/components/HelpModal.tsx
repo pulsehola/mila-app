@@ -88,9 +88,14 @@ export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onC
           <li>Tras escribir, la nota queda seleccionada: usa ♯ ♭ ♮, staccato, acento o ligadura en la paleta izquierda.</li>
           <li>
             Escribe el <b>compás entero</b> a tu ritmo (cabezas, plicas, corchetes, ♯ ♭ ♮ delante de la nota y la barra
-            de compás). Nada se convierte mientras escribes: el compás se digitaliza cuando suma <b>4/4</b>, o antes si
-            tocas <b>Convertir</b> (muestra cuántos tiempos llevas) o Intro. Con «Con botón» solo se convierte cuando tú
-            lo pidas. Lo que no sea música (textos, flechas) queda como anotación.
+            de compás). Nada se convierte mientras escribes: el compás se digitaliza solo en cuanto completa la métrica
+            elegida arriba (<b>2/4, 3/4, 4/4 o 6/8</b>). Si un compás se queda corto (el último, una anacrusa), se
+            convierte al empezar a escribir en otro compás (o con Intro en el Mac). Lo que no sea música (textos,
+            flechas) queda como anotación.
+          </li>
+          <li>
+            <b>Corcheas y semicorcheas unidas</b>: dibuja las cabezas rellenas con sus plicas y une los extremos con una
+            barra (corcheas) o dos (semicorcheas). <b>Ligadura</b>: un arco de una nota a la siguiente.
           </li>
           <li>Zoom: pellizca con dos dedos (o el trackpad del Mac, o ⌘+ / ⌘−); dos dedos también desplazan la hoja.</li>
           <li>
@@ -112,7 +117,7 @@ export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onC
             (es un borrador: revisa y corrige). Con <b>Fondo</b> puedes reajustar o «Detectar notas» otra vez. Al
             exportar sale tal cual se ve.
           </li>
-          <li>El punto junto a cada compás avisa si faltan o sobran tiempos (4/4).</li>
+          <li>El punto junto a cada compás avisa si faltan o sobran tiempos según la métrica.</li>
           <li>
             Mac: <kbd>Espacio</kbd> play/pausa · <kbd>⌘Z</kbd> deshacer · <kbd>⇧⌘Z</kbd> rehacer · <kbd>⌫</kbd> borra la nota · <kbd>↑ ↓</kbd> tono ·{' '}
             <kbd>← →</kbd> navegar · <kbd>#</kbd> <kbd>b</kbd> <kbd>n</kbd> alteraciones · <kbd>S</kbd> staccato · <kbd>A</kbd> acento · <kbd>L</kbd> ligadura ·{' '}

@@ -1,9 +1,10 @@
 import { animate, AnimatePresence, motion } from 'framer-motion'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { Annotation, Background, EditMode, LoopRange, Measure, Note, Pt, Stroke, Transposition } from '../types'
+import type { Annotation, Background, EditMode, LoopRange, Measure, Meter, Note, Pt, Stroke, Transposition } from '../types'
 import { engine } from '../audio/engine'
 import { bbox } from '../recognition/geometry'
-import { clusterStrokes, isScratchOut, splitByHeads, STAFF_GAP } from '../recognition/recognize'
+import { clusterStrokes, detectBeams, isScratchOut, slurEnds, splitByHeads, STAFF_GAP } from '../recognition/recognize'
+import { boxesNear } from '../recognition/geometry'
 import { recognizePersonal } from '../recognition/personal'
 import {
   clampStep,
@@ -12,7 +13,7 @@ import {
   DUR_UNITS,
   makeNote,
   makeRest,
-  MEASURE_UNITS,
+  measureCapacity,
   measureStatus,
   measureUnits,
   newId,
@@ -35,10 +36,10 @@ import { usePenSurface } from '../input/pen'
 import { eraseOnImage, touchesImage } from '../scan/eraseScan'
 import { getImage, putImage } from '../state/library'
 import { ELASTIC } from './springs'
-import { Camera, Check } from 'lucide-react'
+import { Camera } from 'lucide-react'
 
-/** Pausa natural del lápiz antes de reconocer: permite encadenar cabeza + plica + corchete sin cortes. */
-const RECOGNIZE_DELAY = 800
+/** Pausa natural del lápiz antes de comprobar el compás: da tiempo a cabeza + plica + corchete o barra. */
+const RECOGNIZE_DELAY = 1000
 /** Si el Pencil sigue flotando sobre la pantalla se espera algo más, pero nunca más de esto. */
 const MAX_WAIT = 2200
 /** Radio de la goma (px). */
@@ -71,8 +72,8 @@ interface Props {
   onBackground: (bg: Background, record?: boolean) => void
   /** Abre el escaneo/importación (botón de la hoja vacía). */
   onScan: () => void
-  /** true: convierte cada compás al completar 4/4; false: solo con el botón Convertir. */
-  autoConvert: boolean
+  /** Métrica de la partitura: decide cuándo un compás está completo. */
+  meter: Meter
   /** Zoom de Mila (pellizco): 1 = hoja ajustada al ancho. */
   userZoom: number
   onUserZoom: (z: number) => void
@@ -146,7 +147,9 @@ export function ScoreCanvas(p: Props) {
     const l = renderScore(
       host,
       p.measures,
-      bg ? { width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH, rowWidths: bg.rowWidths } : { width },
+      bg
+        ? { meter: p.meter, width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH, rowWidths: bg.rowWidths }
+        : { meter: p.meter, width },
     )
     layoutRef.current = l
     if (import.meta.env.DEV) (window as unknown as { __milaLayout?: Layout }).__milaLayout = l
@@ -314,19 +317,45 @@ export function ScoreCanvas(p: Props) {
     const inserts: Ins[] = []
     const looseAcc: { acc: Exclude<Note['acc'], ''>; x: number; row: number }[] = []
     const toAnnotate: Stroke[][] = []
+    const slurs: { row: number; x0: number; x1: number }[] = []
     let unknown = 0
+    // Ligaduras: arcos cerca de un pentagrama (encima o debajo). Se sacan antes de agrupar para que no
+    // junten dos notas en un solo símbolo; luego se unen las dos notas de sus extremos.
+    let rest: Stroke[] = []
+    for (const st of strokes) {
+      const ends = slurEnds(st)
+      const row = ends ? rowFor((ends.y0 + ends.y1) / 2, l) : -1
+      if (ends && row >= 0) slurs.push({ row, x0: ends.x0, x1: ends.x1 })
+      else rest.push(st)
+    }
+    // Barras de unión: se apartan y luego convierten en corcheas/semicorcheas las notas cuyas plicas tocan.
+    const { beams, count: beamCount } = detectBeams(rest)
+    rest = rest.filter((st) => !beams.has(st))
     // Lo que queda claramente por encima/debajo del pentagrama (texto, flechas) se agrupa aparte para que
-    // nunca se mezcle con las plicas; lo de dentro se separa en una nota por cabeza.
-    const outside = (st: Stroke) => {
+    // nunca se mezcle con las plicas; lo de dentro se separa en una nota por cabeza. Un trazo de fuera que
+    // toca uno de dentro (corchete o plica de una nota aguda) pertenece a la música.
+    const farOut = (st: Stroke) => {
       const b = bbox(st)
       const row = rowFor(b.cy, l)
       if (row < 0) return true
       return b.y1 < l.rows[row].yTop - 15 || b.y0 > l.rows[row].yBottom + 15
     }
-    const groups = [
-      ...clusterStrokes(strokes.filter((st) => !outside(st))).flatMap(splitByHeads),
-      ...clusterStrokes(strokes.filter(outside)),
-    ]
+    const inStaff = rest.filter((st) => !farOut(st))
+    let outsideList = rest.filter(farOut)
+    for (let changed = true; changed; ) {
+      changed = false
+      const boxes = inStaff.map((st) => bbox(st))
+      for (const st of outsideList) {
+        const b = bbox(st)
+        if (boxes.some((ib) => boxesNear(ib, b, 6))) {
+          inStaff.push(st)
+          outsideList = outsideList.filter((x) => x !== st)
+          changed = true
+          break
+        }
+      }
+    }
+    const groups = [...clusterStrokes(inStaff).flatMap(splitByHeads), ...clusterStrokes(outsideList)]
     for (const group of groups) {
       const box = bbox(group.flat())
       const row = rowFor(box.cy, l)
@@ -355,12 +384,18 @@ export function ScoreCanvas(p: Props) {
         unknown++
         continue
       }
-      const note =
-        rec.kind === 'rest' ? makeRest(rec.dur) : makeNote({ dur: rec.dur, step: rec.step, acc: rec.acc ?? '' })
+      let dur = rec.dur
+      // Nota unida por barra(s): 1 barra = corchea, 2 o más = semicorchea (solo cabezas rellenas).
+      if (rec.kind === 'note' && (dur === 'q' || dur === '8')) {
+        const beamsHere = Math.max(0, ...group.map((st) => beamCount.get(st) ?? 0))
+        if (beamsHere >= 2) dur = '16'
+        else if (beamsHere === 1 && dur === 'q') dur = '8'
+      }
+      const note = rec.kind === 'rest' ? makeRest(dur) : makeNote({ dur, step: rec.step, acc: rec.acc ?? '' })
       inserts.push({ measure: mbox.index, x: rec.x, note, row })
     }
 
-    return { inserts, looseAcc, toAnnotate, unknown }
+    return { inserts, looseAcc, toAnnotate, unknown, slurs }
   }
 
   /** Compás (índice) donde cae un trazo: por el centro de su caja. -1 si está fuera de los pentagramas. */
@@ -395,19 +430,7 @@ export function ScoreCanvas(p: Props) {
     const units = r.inserts.filter((i) => i.measure === mi).reduce((sum, i) => sum + DUR_UNITS[i.note.dur], done)
     return { units, unknown: r.unknown }
   }
-  const unitsIn = (mi: number) => readMeasure(mi).units
 
-  /** Caja de la tinta pendiente de convertir (para el botón "Convertir"). */
-  const [pendingBox, setPendingBox] = useState<{ x: number; y: number; beats: number | null } | null>(null)
-  const updatePendingBox = useCallback(() => {
-    const all = pendingRef.current.flatMap((p) => p.stroke)
-    if (!all.length) return setPendingBox(null)
-    const b = bbox(all)
-    // Progreso del compás que se está escribiendo (lo ya convertido + la tinta leída), en tiempos de negra.
-    const last = pendingRef.current[pendingRef.current.length - 1].measure
-    const units = last >= 0 ? unitsIn(last) : null
-    setPendingBox({ x: b.x1, y: b.y0, beats: units === null ? null : units / 4 })
-  }, [])
 
   /**
    * Convierte TODA la tinta pendiente (el compás entero que Mila haya escrito) de una vez:
@@ -427,7 +450,6 @@ export function ScoreCanvas(p: Props) {
       const all = bbox(strokes.flat())
       ghostInk(all.cx, all.cy)
     }
-    updatePendingBox()
     redrawInk()
     if (!l || strokes.length === 0) return
     const cur = propsRef.current
@@ -453,7 +475,26 @@ export function ScoreCanvas(p: Props) {
       else unknown++
     }
 
-    if (inserts.length > 0 || accOnExisting.size > 0) {
+    // Ligaduras: une la nota bajo el extremo izquierdo del arco con la del derecho (nuevas o ya escritas).
+    const slurOnExisting = new Set<string>()
+    for (const s of read.slurs) {
+      const rowMeasures = new Set(l.measures.filter((m) => m.row === s.row).map((m) => m.index))
+      const cands: { x: number; ins?: Ins; id?: string }[] = [
+        ...inserts.filter((i) => i.row === s.row && i.note.kind === 'note').map((ins) => ({ x: ins.x, ins })),
+        ...l.notes.filter((n) => rowMeasures.has(n.measure) && n.kind === 'note').map((n) => ({ x: n.x, id: n.id })),
+      ]
+      const nearest = (x: number) => cands.filter((c) => Math.abs(c.x - x) <= 24).sort((p, q) => Math.abs(p.x - x) - Math.abs(q.x - x))[0]
+      const left = nearest(s.x0)
+      const right = nearest(s.x1)
+      if (!left || !right || left === right || left.x >= right.x) {
+        unknown++
+        continue
+      }
+      if (left.ins) left.ins.note = { ...left.ins.note, slur: true }
+      else if (left.id) slurOnExisting.add(left.id)
+    }
+
+    if (inserts.length > 0 || accOnExisting.size > 0 || slurOnExisting.size > 0) {
       const xs = new Map<number, number[]>()
       const xsFor = (mi: number) => {
         if (!xs.has(mi)) xs.set(mi, l.notes.filter((n) => n.measure === mi).sort((a, b) => a.index - b.index).map((n) => n.x))
@@ -461,7 +502,16 @@ export function ScoreCanvas(p: Props) {
       }
       cur.onEdit()
       cur.setMeasures((ms) => {
-        const next = ms.map((m) => (m.some((n) => accOnExisting.has(n.id)) ? m.map((n) => (accOnExisting.has(n.id) ? { ...n, acc: accOnExisting.get(n.id)! } : n)) : m.slice()))
+        const touched = (n: Note) => accOnExisting.has(n.id) || slurOnExisting.has(n.id)
+        const next = ms.map((m) =>
+          m.some(touched)
+            ? m.map((n) =>
+                touched(n)
+                  ? { ...n, ...(accOnExisting.has(n.id) ? { acc: accOnExisting.get(n.id)! } : {}), ...(slurOnExisting.has(n.id) ? { slur: true } : {}) }
+                  : n,
+              )
+            : m.slice(),
+        )
         for (const ins of [...inserts].sort((p, q) => p.x - q.x)) {
           const arr = xsFor(ins.measure)
           const idx = arr.filter((x) => x < ins.x).length
@@ -476,7 +526,7 @@ export function ScoreCanvas(p: Props) {
         cur.onSelect(last.id)
         if (last.kind === 'note') void engine.preview(soundingMidi(writtenMidi(last.step, last.acc), cur.transposition), 260)
       } else {
-        popRef.current = [...accOnExisting.keys()]
+        popRef.current = [...accOnExisting.keys(), ...slurOnExisting]
       }
     }
 
@@ -498,23 +548,23 @@ export function ScoreCanvas(p: Props) {
   }, [redrawInk, ghostInk])
 
   /**
-   * Compás completo: la tinta NO se convierte mientras se escribe. Tras una pausa natural del lápiz se LEE
-   * (sin convertir) cada compás con tinta, y solo se digitaliza el que ya suma 4/4 sin trazos dudosos.
-   * Un compás a medias se queda como tinta hasta completarlo o hasta pulsar Convertir / Intro.
-   * Con "convertir con botón" no hay comprobación automática: solo el botón (o Intro).
+   * Compás completo (sin botones): la tinta NO se convierte mientras se escribe. Tras una pausa natural del
+   * lápiz se LEE (sin convertir) cada compás con tinta, y se digitaliza el que ya completa la métrica
+   * (2/4, 3/4, 4/4 o 6/8) sin trazos dudosos. Un compás a medias se convierte cuando Mila pasa a escribir
+   * en otro compás (ver finishStroke) o con Intro en el Mac.
    */
   const evaluate = useCallback(() => {
     if (activeRef.current) return
+    const capacity = measureCapacity(propsRef.current.meter)
     const full = new Set<number>()
     for (const mi of new Set(pendingRef.current.map((s) => s.measure))) {
       if (mi < 0) continue
       const r = readMeasure(mi)
-      if (r.units >= MEASURE_UNITS && r.unknown === 0) full.add(mi)
+      if (r.units >= capacity && r.unknown === 0) full.add(mi)
     }
     if (full.size) flush(full)
-    else updatePendingBox()
     // readMeasure solo usa refs: no hace falta en las dependencias.
-  }, [flush, updatePendingBox])
+  }, [flush])
 
   /**
    * Pausa natural: el reloj arranca al levantar el lápiz y se reinicia al volver a apoyarlo, así Mila puede
@@ -523,9 +573,7 @@ export function ScoreCanvas(p: Props) {
   const idleSince = useRef(0)
   const queueFlush = useCallback(
     (hover = false) => {
-      updatePendingBox()
       window.clearTimeout(timerRef.current)
-      if (!propsRef.current.autoConvert) return
       const now = performance.now()
       if (!hover) idleSince.current = now
       const wait = hover
@@ -533,7 +581,7 @@ export function ScoreCanvas(p: Props) {
         : RECOGNIZE_DELAY
       timerRef.current = window.setTimeout(evaluate, wait)
     },
-    [evaluate, updatePendingBox],
+    [evaluate],
   )
 
   // "Convertir" desde fuera (tecla Intro).
@@ -1002,7 +1050,21 @@ export function ScoreCanvas(p: Props) {
       }
     }
 
-    pendingRef.current.push({ stroke, pen: a.pen, measure: l ? measureFor(stroke, l) : -1 })
+    let measure = l ? measureFor(stroke, l) : -1
+    if (measure < 0) {
+      // Fuera del pentagrama pero tocando tinta pendiente (barra de unión o corchete de una nota aguda,
+      // ligadura): pertenece a ese compás.
+      const sb = bbox(stroke)
+      const host = pendingRef.current.find((s) => s.measure >= 0 && boxesNear(bbox(s.stroke), sb, 10))
+      if (host) measure = host.measure
+    }
+    // Pasar a escribir en otro compás cierra el anterior: lo que tenga se convierte aunque no esté completo
+    // (último compás, anacrusa...). El indicador del compás avisa si faltan tiempos.
+    if (measure >= 0) {
+      const others = new Set(pendingRef.current.map((s) => s.measure).filter((m) => m >= 0 && m !== measure))
+      if (others.size) flush(others)
+    }
+    pendingRef.current.push({ stroke, pen: a.pen, measure })
     redrawInk()
     queueFlush()
   }
@@ -1114,7 +1176,7 @@ export function ScoreCanvas(p: Props) {
 
         {/* Indicador de compás (4/4) */}
         {layout?.measures.map((m) => {
-          const st = measureStatus(p.measures[m.index] ?? [])
+          const st = measureStatus(p.measures[m.index] ?? [], p.meter)
           if (st.state === 'empty') return null
           const ok = st.state === 'ok'
           return (
@@ -1129,7 +1191,7 @@ export function ScoreCanvas(p: Props) {
                 animate={{ opacity: ok ? 0.55 : 1, y: 0 }}
               >
                 {!ok && (
-                  <span style={{ color: st.state === 'short' ? 'var(--warn)' : 'var(--bad)' }}>{describeDiff(st.diff)}</span>
+                  <span style={{ color: st.state === 'short' ? 'var(--warn)' : 'var(--bad)' }}>{describeDiff(st.diff, p.meter)}</span>
                 )}
                 <span
                   className="inline-block h-2 w-2 rounded-full"
@@ -1239,32 +1301,6 @@ export function ScoreCanvas(p: Props) {
                 <Camera size={18} /> o escanea / importa tu partitura de papel
               </motion.button>
             </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Botón "Convertir" junto a la tinta pendiente */}
-        <AnimatePresence>
-          {pendingBox && p.mode === 'notes' && (
-            <motion.button
-              key="convert"
-              type="button"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => flush()}
-              initial={{ opacity: 0, scale: 0.6 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.6 }}
-              whileTap={{ scale: 0.9 }}
-              transition={ELASTIC}
-              className="absolute z-20 flex h-9 items-center gap-1 rounded-full bg-mi px-3 text-xs font-extrabold text-white shadow-lg"
-              style={{ left: pendingBox.x + 8, top: Math.max(4, pendingBox.y - 40) }}
-            >
-              <Check size={15} strokeWidth={3} /> Convertir
-              {pendingBox.beats !== null && (
-                <span className="font-semibold opacity-80">
-                  · {Number.isInteger(pendingBox.beats) ? pendingBox.beats : pendingBox.beats.toFixed(2).replace(/0$/, '')}/4
-                </span>
-              )}
-            </motion.button>
           )}
         </AnimatePresence>
 

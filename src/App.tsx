@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Hourglass, ImageIcon, Minus, MousePointerClick, Plus, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
+import { ImageIcon, Minus, Plus, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createTapTempo, engine } from './audio/engine'
 import { ArticulationPalette } from './components/ArticulationPalette'
@@ -24,7 +24,7 @@ import {
   writtenMidi,
 } from './state/music'
 import { useScore } from './state/useScore'
-import type { Background, EditMode, LoopRange, Note, Score, Transposition } from './types'
+import type { Background, EditMode, LoopRange, Meter, Note, Score, Transposition } from './types'
 import { FOLDER_NAME, fileSlug, parseMilaFile, type SavedScore, toMilaFile } from './state/library'
 import { useLibrary } from './state/useLibrary'
 import { shareFile } from './export/share'
@@ -57,6 +57,8 @@ function measuresToCover(bg: Background): number {
 export default function App() {
   const api = useScore()
   const { score } = api
+  /** Métrica de la partitura (las antiguas, sin este dato, son 4/4). */
+  const meter: Meter = score.meter ?? '4/4'
   const lib = useLibrary(score)
 
   const [dark, setDark] = useState(() => localStorage.getItem('mila:theme') === 'dark')
@@ -71,20 +73,6 @@ export default function App() {
   const [fingerDraw, setFingerDraw] = useState(false)
   const [adjustBg, setAdjustBg] = useState(false)
   const [userZoom, setUserZoom] = useState(1)
-  const [autoConvert, setAutoConvert] = useState(() => {
-    try {
-      return localStorage.getItem('mila:autoConvert') !== 'off'
-    } catch {
-      return true
-    }
-  })
-  useEffect(() => {
-    try {
-      localStorage.setItem('mila:autoConvert', autoConvert ? 'on' : 'off')
-    } catch {
-      /* sin almacenamiento */
-    }
-  }, [autoConvert])
   const zoomBy = useCallback((k: number) => setUserZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(z * k * 100) / 100))), [])
   const [bgPanel, setBgPanel] = useState(false)
   const [scanBusy, setScanBusy] = useState(false)
@@ -138,16 +126,17 @@ export default function App() {
 
   const startPlayback = useCallback(async () => {
     const range = loopOn && loopRange ? loopRange : { start: 0, end: lastUsed }
-    const { events, totalUnits } = buildEvents(score.measures, score.transposition, range)
+    const { events, totalUnits } = buildEvents(score.measures, score.transposition, range, meter)
     if (events.length === 0) {
       showToast('Escribe alguna nota para poder escucharla.', 'warn')
       return
     }
     engine.setMetronome(metro)
+    engine.setMeter(meter)
     setMetroOnly(false)
     await engine.play({ events, totalUnits, loop: loopOn, bpm: score.bpm })
     setPlaying(true)
-  }, [loopOn, loopRange, lastUsed, score.measures, score.transposition, score.bpm, metro, showToast])
+  }, [loopOn, loopRange, lastUsed, score.measures, score.transposition, score.bpm, meter, metro, showToast])
 
   const stopPlayback = useCallback(() => {
     engine.stop(false)
@@ -171,7 +160,7 @@ export default function App() {
       return
     }
     if (engine.isPlaying) void startRef.current()
-  }, [score.transposition, loopOn, loopRange])
+  }, [score.transposition, meter, loopOn, loopRange])
 
   const setBpm = useCallback(
     (v: number) => {
@@ -187,13 +176,14 @@ export default function App() {
     setMetro(next)
     engine.setMetronome(next)
     if (next && !playing) {
+      engine.setMeter(meter)
       await engine.startMetronomeOnly(score.bpm)
       setMetroOnly(true)
     } else if (!next && metroOnly) {
       engine.stop(false)
       setMetroOnly(false)
     }
-  }, [metro, playing, metroOnly, score.bpm])
+  }, [metro, playing, metroOnly, score.bpm, meter])
 
   const onTap = useCallback(() => {
     const v = tap()
@@ -640,6 +630,8 @@ export default function App() {
         onTitle={(title) => api.patch({ title })}
         transposition={score.transposition}
         onTransposition={(t) => api.patch({ transposition: t })}
+        meter={meter}
+        onMeter={(m) => api.patch({ meter: m })}
         dark={dark}
         onTheme={() => setDark((d) => !d)}
         playing={playing}
@@ -697,7 +689,7 @@ export default function App() {
             adjustBg={adjustBg && !!score.background}
             onBackground={onBackground}
             onScan={() => setModal('scan')}
-            autoConvert={autoConvert}
+            meter={meter}
             userZoom={userZoom}
             onUserZoom={setUserZoom}
           />
@@ -740,24 +732,6 @@ export default function App() {
           </AnimatePresence>
           <div className="pointer-events-none absolute bottom-3 left-4 z-30 flex items-center gap-2">
             <ModeSwitch mode={mode} onMode={setMode} />
-            {mode === 'notes' && (
-              <motion.button
-                type="button"
-                aria-pressed={autoConvert}
-                aria-label={autoConvert ? 'Convertir al completar el compás' : 'Convertir solo con el botón'}
-                title={autoConvert ? 'Convierte cuando el compás suma 4/4 (toca para usar solo el botón Convertir)' : 'Convierte solo con el botón Convertir o Intro'}
-                onClick={() => {
-                  setAutoConvert((v) => !v)
-                  showToast(autoConvert ? 'Escribe el compás entero y toca «Convertir» (o Intro)' : 'Se convierte cada compás al completar 4/4')
-                }}
-                whileTap={{ scale: 0.86 }}
-                transition={ELASTIC}
-                className="pointer-events-auto flex h-11 items-center gap-1.5 rounded-full border border-line bg-panel px-3 text-xs font-extrabold shadow"
-              >
-                {autoConvert ? <Hourglass size={16} /> : <MousePointerClick size={16} />}
-                <span className="hidden lg:inline">{autoConvert ? 'Compás completo' : 'Con botón'}</span>
-              </motion.button>
-            )}
             <motion.button
               type="button"
               aria-label="Borrar toda la partitura"

@@ -42,7 +42,12 @@ function ScoreThumb({ score }: { score: Score }) {
     const measures = bg
       ? score.measures.slice(0, (bg.rowWidths ?? []).slice(0, 3).reduce((n, r) => n + r.length, 0) || bg.perRow * 3)
       : score.measures.slice(0, 4)
-    const l = renderScore(el, measures, bg ? { width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH, rowWidths: bg.rowWidths } : { width: THUMB_W, perRow: 2 })
+    const meter = score.meter
+    const l = renderScore(
+      el,
+      measures,
+      bg ? { meter, width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH, rowWidths: bg.rowWidths } : { meter, width: THUMB_W, perRow: 2 },
+    )
     // VexFlow fija el tamaño en píxeles del contenedor: aquí debe adaptarse al ancho de la tarjeta.
     el.style.width = ''
     el.style.height = ''

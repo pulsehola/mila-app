@@ -10,7 +10,7 @@ import {
   StaveNote,
   Voice,
 } from 'vexflow'
-import type { Measure } from '../types'
+import type { Measure, Meter } from '../types'
 import { vexKey } from '../state/music'
 
 export const ROW_H = 160
@@ -60,8 +60,10 @@ export interface RenderOptions {
   perRow?: number
   /** Dibuja números de compás con VexFlow (PDF). En pantalla se usan insignias HTML. */
   measureNumbers?: boolean
-  /** Muestra el 4/4 en el primer compás (false en páginas de continuación). */
+  /** Muestra la métrica en el primer compás (false en páginas de continuación). */
   timeSig?: boolean
+  /** Métrica de la partitura (4/4 por defecto). */
+  meter?: Meter
   /** Separación entre sistemas (px); por defecto ROW_H. Con fondo escaneado se ajusta al papel. */
   rowH?: number
   /**
@@ -118,7 +120,7 @@ export function renderScore(container: HTMLElement, measures: Measure[], opts: R
       const w = rowsSpec[row][c]
       const stave = new Stave(x, y, w)
       if (first) stave.addClef('treble')
-      if (first && row === 0 && showTime) stave.addTimeSignature('4/4')
+      if (first && row === 0 && showTime) stave.addTimeSignature(opts.meter ?? '4/4')
       if (opts.measureNumbers) stave.setMeasure(firstIndex + mi + 1)
       stave.setContext(ctx).draw()
       rowTop = stave.getYForLine(0)
@@ -138,7 +140,7 @@ export function renderScore(container: HTMLElement, measures: Measure[], opts: R
       layout.measures.push(box)
 
       const m = measures[mi]
-      if (m.length > 0) drawNotes(ctx, stave, m, mi, layout)
+      if (m.length > 0) drawNotes(ctx, stave, m, mi, layout, opts.meter ?? '4/4')
       x += w
     }
     layout.rows.push({ yTop: rowTop, yBottom: rowBottom })
@@ -152,6 +154,7 @@ function drawNotes(
   m: Measure,
   mi: number,
   layout: Layout,
+  meter: Meter,
 ): void {
   const vfNotes = m.map((n) => {
     const isRest = n.kind === 'rest'
@@ -172,7 +175,8 @@ function drawNotes(
     return note
   })
 
-  const voice = new Voice({ numBeats: 4, beatValue: 4 }).setMode(Voice.Mode.SOFT)
+  const [numBeats, beatValue] = meter.split('/').map(Number)
+  const voice = new Voice({ numBeats, beatValue }).setMode(Voice.Mode.SOFT)
   voice.addTickables(vfNotes)
   const fmt = new Formatter().joinVoices([voice])
   fmt.format([voice], Math.max(40, stave.getNoteEndX() - stave.getNoteStartX() - 18))

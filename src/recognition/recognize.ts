@@ -1,4 +1,4 @@
-import type { Accidental, Duration, Stroke } from '../types'
+import type { Accidental, Duration, Pt, Stroke } from '../types'
 import {
   type BBox,
   bbox,
@@ -20,6 +20,49 @@ export interface StaffCtx {
 }
 
 export const STAFF_GAP = 10
+/** Trazos separados por menos de esto (ms) se consideran del mismo símbolo si están cerca. */
+export const TIME_JOIN_MS = 450
+
+/**
+ * Cuánto del interior de una cabeza tiene tinta (0 = hueca, 1 = rellena). Se muestrea el centro de la cabeza
+ * (la elipse reducida a la mitad) y se mira si hay trazo cerca: un círculo vacío deja el centro limpio aunque
+ * sea pequeño o se haya repasado; una cabeza rellena (garabato, espiral, punto) lo cubre.
+ */
+export function headFill(strokes: Stroke[], box: BBox): number {
+  const rx = box.w / 2
+  const ry = box.h / 2
+  if (rx < 3.5 || ry < 3) return 1 // tan pequeña que solo puede ser un punto relleno
+  const reach = Math.max(1.6, Math.min(box.w, box.h) * 0.14)
+  const segs: [Pt, Pt][] = []
+  for (const s of strokes) {
+    if (s.length === 1) segs.push([s[0], s[0]])
+    for (let i = 1; i < s.length; i++) segs.push([s[i - 1], s[i]])
+  }
+  const near = (x: number, y: number) =>
+    segs.some(([a, b]) => {
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const len2 = dx * dx + dy * dy
+      const t = len2 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / len2)) : 0
+      return Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy)) <= reach
+    })
+  let inside = 0
+  let covered = 0
+  const N = 9
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      const u = (i / (N - 1)) * 2 - 1
+      const v = (j / (N - 1)) * 2 - 1
+      if (u * u + v * v > 1) continue
+      inside++
+      if (near(box.cx + u * rx * 0.5, box.cy + v * ry * 0.5)) covered++
+    }
+  }
+  return inside ? covered / inside : 0
+}
+
+/** Umbral de "rellena" para headFill. */
+export const FILLED = 0.4
 
 export type Recognized =
   | { kind: 'note'; dur: Duration; step: number; x: number; y: number; acc?: Accidental; reason: string }
@@ -47,6 +90,15 @@ export function clusterStrokes(strokes: Stroke[], gap = 22): Stroke[][] {
     for (let j = i + 1; j < strokes.length; j++) {
       if (boxesNear(boxes[i], boxes[j], gap)) parent[find(i)] = find(j)
     }
+  }
+  // Agrupado temporal: dos trazos seguidos en el tiempo (el lápiz apenas se levantó) y cercanos forman parte
+  // del mismo símbolo aunque estén algo más separados (p.ej. una plica larga o un corchete abierto).
+  for (let i = 1; i < strokes.length; i++) {
+    const prev = strokes[i - 1]
+    const cur = strokes[i]
+    if (!prev.length || !cur.length) continue
+    const pause = cur[0].t - prev[prev.length - 1].t
+    if (pause >= 0 && pause < TIME_JOIN_MS && boxesNear(boxes[i - 1], boxes[i], gap + 12)) parent[find(i)] = find(i - 1)
   }
   const groups = new Map<number, Stroke[]>()
   strokes.forEach((s, i) => {
@@ -76,6 +128,12 @@ interface Feat {
 }
 const feat = (s: Stroke): Feat => ({ s, box: bbox(s), len: pathLength(s), straight: straightness(s) })
 
+/** Nota de un solo trazo: bucle (cabeza) que sigue en una plica. */
+function isPaddle(f: Feat): boolean {
+  if (f.box.h < 24 || f.box.w > 30 || f.box.h / Math.max(f.box.w, 1) < 1.5) return false
+  return !!findLoop(f.s)
+}
+
 function isStemLike(f: Feat): boolean {
   return f.box.h >= 18 && f.box.h / Math.max(f.box.w, 1) >= 2.4 && f.straight >= 0.82
 }
@@ -97,9 +155,10 @@ function isHeadLike(f: Feat): boolean {
  * cabeza más cercana en horizontal.
  */
 export function splitByHeads(strokes: Stroke[]): Stroke[][] {
-  if (strokes.length < 3) return [strokes]
+  if (strokes.length < 2) return [strokes]
   const feats = strokes.map(feat)
-  const heads = feats.filter(isHeadLike)
+  // Cabeza = trazo de cabeza o nota hecha de un solo trazo (cabeza + plica sin levantar el lápiz).
+  const heads = feats.filter((f) => isHeadLike(f) || isPaddle(f))
   // Cabezas que se solapan (garabato de relleno en varios trazos) cuentan como una.
   const groups: { box: BBox; members: Feat[] }[] = []
   for (const hd of heads) {
@@ -182,13 +241,15 @@ export function recognizeCluster(strokes: Stroke[], staff: StaffCtx): Recognized
     }
     if (loop && f.box.h / Math.max(f.box.w, 1) >= 1.5 && f.box.h >= 24 && f.box.w <= 30) {
       const cy = loop.box.cy
+      // Antes salía siempre blanca: una negra hecha de un trazo (garabato + plica) también tiene "bucle".
+      const filled = headFill([f.s], loop.box) >= FILLED
       return {
         kind: 'note',
-        dur: 'h',
+        dur: filled ? 'q' : 'h',
         step: stepFromY(cy, staff),
         x: loop.box.cx,
         y: cy,
-        reason: 'círculo+plica en un trazo',
+        reason: filled ? 'cabeza rellena + plica en un trazo (negra)' : 'círculo+plica en un trazo (blanca)',
       }
     }
   }
@@ -211,7 +272,9 @@ export function recognizeCluster(strokes: Stroke[], staff: StaffCtx): Recognized
     const d = (merged.w + merged.h) / 2
     const ratio = mergedLen / (Math.PI * Math.max(d, 1))
     const tiny = merged.w < 10 && merged.h < 10
-    const isFilled = tiny || ratio >= 2.3 || extraHeads.length > 0
+    // Relleno por la tinta que hay DENTRO de la cabeza (lo largo del trazo solo ayuda en casos dudosos).
+    const fill = headFill([headFeat.s, ...extraHeads.map((f) => f.s)], merged)
+    const isFilled = tiny || extraHeads.length > 0 || fill >= FILLED || (ratio >= 2.3 && fill >= 0.22)
 
     let others = feats.filter((f) => f !== headFeat && !extraHeads.includes(f))
     // Alteración escrita a la izquierda de la cabeza (sin tocarla).
@@ -295,4 +358,62 @@ function recognizeRest(f: Feat, staff: StaffCtx): Recognized | null {
     }
   }
   return null
+}
+
+/**
+ * Barras de unión (corcheas/semicorcheas unidas): trazos casi rectos y poco inclinados que tocan el extremo
+ * de 2 o más plicas. Devuelve las barras encontradas y, por cada plica, cuántas barras la cruzan
+ * (1 = corchea, 2 o más = semicorchea).
+ */
+export function detectBeams(strokes: Stroke[]): { beams: Set<Stroke>; count: Map<Stroke, number> } {
+  const feats = strokes.map(feat)
+  const stems = feats.filter(isStemLike)
+  const beams = new Set<Stroke>()
+  const count = new Map<Stroke, number>()
+  if (stems.length < 2) return { beams, count }
+  for (const f of feats) {
+    if (stems.includes(f)) continue
+    const { w, h } = f.box
+    if (w < 16 || f.straight < 0.9 || h > w * 0.6) continue
+    const a = f.s[0]
+    const b = f.s[f.s.length - 1]
+    const [left, right] = a.x <= b.x ? [a, b] : [b, a]
+    const yAt = (x: number) => left.y + ((right.y - left.y) * (x - left.x)) / Math.max(1, right.x - left.x)
+    const touched = stems.filter((st) => {
+      const x = st.box.cx
+      if (x < f.box.x0 - 6 || x > f.box.x1 + 6) return false
+      const y = yAt(x)
+      // La barra va en el extremo libre de la plica (o un poco más adentro si es la 2ª barra).
+      const nearTop = y >= st.box.y0 - 8 && y <= st.box.y0 + 14
+      const nearBottom = y <= st.box.y1 + 8 && y >= st.box.y1 - 14
+      return nearTop || nearBottom
+    })
+    if (touched.length < 2) continue
+    beams.add(f.s)
+    for (const st of touched) count.set(st.s, (count.get(st.s) ?? 0) + 1)
+  }
+  return { beams, count }
+}
+
+/**
+ * Ligadura (de expresión o de prolongación): un arco suave y ancho, poco alto, con los extremos a una altura
+ * parecida y la panza separada de la recta que los une. Devuelve sus extremos para buscar las dos notas.
+ */
+export function slurEnds(s: Stroke): { x0: number; y0: number; x1: number; y1: number } | null {
+  if (s.length < 6) return null
+  const f = feat(s)
+  const { w, h } = f.box
+  if (w < 24 || h < 3 || h > w * 0.45) return null
+  if (f.straight < 0.6 || f.straight > 0.985) return null
+  if (reversals(s, 'x', 4) > 0) return null // un arco no vuelve atrás en horizontal
+  const a = s[0]
+  const b = s[s.length - 1]
+  if (Math.abs(a.y - b.y) > w * 0.35) return null
+  // "Panza": distancia máxima de la curva a la recta entre extremos.
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1
+  let sag = 0
+  for (const p of s) sag = Math.max(sag, Math.abs((b.x - a.x) * (a.y - p.y) - (a.x - p.x) * (b.y - a.y)) / len)
+  if (sag < 3 || sag > w * 0.5) return null
+  const [l, r] = a.x <= b.x ? [a, b] : [b, a]
+  return { x0: l.x, y0: l.y, x1: r.x, y1: r.y }
 }

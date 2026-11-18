@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { CircleHelp, Hand, LayoutGrid, Mic, Moon, Redo2, Share2, Sun, Undo2 } from 'lucide-react'
-import type { Transposition } from '../types'
+import type { Meter, Transposition } from '../types'
+import { METERS } from '../state/music'
 import { Logo, Wordmark } from './Logo'
 import { IconButton } from './ui'
 import { ELASTIC } from './springs'
@@ -10,6 +11,9 @@ interface Props {
   onTitle: (t: string) => void
   transposition: Transposition
   onTransposition: (t: Transposition) => void
+  /** Métrica de toda la partitura (2/4, 3/4, 4/4, 6/8). */
+  meter: Meter
+  onMeter: (m: Meter) => void
   dark: boolean
   onTheme: () => void
   playing: boolean
@@ -37,10 +41,12 @@ export function TopBar(p: Props) {
     >
       {/* Logo: mismo alto (44 px) que el resto de controles y centrado con ellos. El SVG va como "block"
           para que no herede el hueco de línea base de un elemento inline. */}
-      <div className="flex h-11 shrink-0 items-center gap-2.5">
-        <Logo size={40} playing={p.playing} className="block shrink-0" />
-        <div className="flex flex-col justify-center gap-[3px]">
-          <Wordmark className="text-[22px] leading-none" />
+      <div className="flex h-11 flex-none items-center gap-2.5">
+        <span className="grid h-10 w-10 flex-none place-items-center" style={{ aspectRatio: '1 / 1' }}>
+          <Logo size={40} playing={p.playing} interactive={false} />
+        </span>
+        <div className="flex flex-none flex-col justify-center gap-[3px] whitespace-nowrap">
+          <Wordmark className="text-[22px] leading-none" animate={false} />
           <div className="text-[10px] font-bold uppercase leading-none tracking-widest text-muted">partituras a mano</div>
         </div>
       </div>
@@ -53,7 +59,25 @@ export function TopBar(p: Props) {
         style={{ fontSize: 16 }}
       />
 
-      <div className="relative ml-auto flex h-11 items-center rounded-2xl border border-line bg-paper p-1" role="group" aria-label="Transposición">
+      {/* Métrica: selector nativo (en el iPad abre la rueda del sistema, cómoda con el dedo). */}
+      <label className="relative ml-auto flex h-11 flex-none items-center gap-1 rounded-2xl border border-line bg-paper pl-3 pr-2 text-sm font-extrabold" title="Compás de la partitura">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-muted">Compás</span>
+        <select
+          aria-label="Compás (métrica)"
+          value={p.meter}
+          onChange={(e) => p.onMeter(e.target.value as Meter)}
+          className="h-9 cursor-pointer appearance-none rounded-xl bg-transparent px-1.5 text-base font-black focus:outline-none"
+          style={{ fontSize: 16 }}
+        >
+          {METERS.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <div className="relative flex h-11 items-center rounded-2xl border border-line bg-paper p-1" role="group" aria-label="Transposición">
         {(
           [
             ['Bb', 'Trompeta Sib'],

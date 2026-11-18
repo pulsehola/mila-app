@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
@@ -24,7 +24,9 @@ function offlineServiceWorker(): Plugin {
       const files = [
         '/',
         ...Object.keys(bundle).filter((f) => !f.endsWith('.map') && f !== 'index.html' && existsSync(join(outDir, f))),
-        ...readdirSync(publicDir).filter((f) => !f.startsWith('.')),
+        // Solo archivos sueltos de public/ (una carpeta como pdfjs/ daría 404 y rompería toda la instalación;
+        // sus recursos se guardan en caché la primera vez que se usan).
+        ...readdirSync(publicDir).filter((f) => !f.startsWith('.') && statSync(join(publicDir, f)).isFile()),
       ].map((f) => (f.startsWith('/') ? f : `/${f}`))
       const version = createHash('sha256').update(files.join('|')).digest('hex').slice(0, 10)
       writeFileSync(

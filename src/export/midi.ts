@@ -16,12 +16,15 @@ const ascii = (s: string) => Array.from(s).map((c) => c.charCodeAt(0) & 0x7f)
 
 /** MIDI formato 0 con la altura sonora (respeta la transposición elegida). */
 export function scoreToMidi(score: Score): Uint8Array {
-  const { events } = buildEvents(score.measures, score.transposition)
+  const meter = score.meter ?? '4/4'
+  const { events } = buildEvents(score.measures, score.transposition, null, meter)
   const track: number[] = []
 
   const usPerQuarter = Math.round(60_000_000 / score.bpm)
   track.push(0x00, 0xff, 0x51, 0x03, (usPerQuarter >> 16) & 255, (usPerQuarter >> 8) & 255, usPerQuarter & 255)
-  track.push(0x00, 0xff, 0x58, 0x04, 4, 2, 24, 8) // 4/4
+  const [num, den] = meter.split('/').map(Number)
+  // Compás: numerador, denominador como potencia de 2 (4 → 2, 8 → 3).
+  track.push(0x00, 0xff, 0x58, 0x04, num, Math.log2(den), den === 8 ? 36 : 24, 8)
   const name = ascii(score.title || 'MILA')
   track.push(0x00, 0xff, 0x03, ...vlq(name.length), ...name)
   track.push(0x00, 0xc0, 56) // programa 57: Trumpet

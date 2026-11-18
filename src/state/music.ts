@@ -1,7 +1,26 @@
-import type { Accidental, Duration, Measure, Note, Transposition } from '../types'
+import type { Accidental, Duration, Measure, Meter, Note, Transposition } from '../types'
 
 /** Unidades de semicorchea por compás 4/4. */
 export const MEASURE_UNITS = 16
+
+export const METERS: Meter[] = ['2/4', '3/4', '4/4', '6/8']
+export const DEFAULT_METER: Meter = '4/4'
+
+export function isMeter(v: unknown): v is Meter {
+  return typeof v === 'string' && (METERS as string[]).includes(v)
+}
+
+/** Capacidad de un compás en semicorcheas: 2/4 = 8, 3/4 = 12, 4/4 = 16, 6/8 = 12. */
+export function measureCapacity(meter: Meter = DEFAULT_METER): number {
+  const [n, d] = meter.split('/').map(Number)
+  return (n * 16) / d
+}
+
+/** Numerador y denominador de la métrica. */
+export function meterParts(meter: Meter = DEFAULT_METER): { beats: number; beatType: number } {
+  const [beats, beatType] = meter.split('/').map(Number)
+  return { beats, beatType }
+}
 export const MIN_STEP = -4 // La3
 export const MAX_STEP = 15 // Re6
 
@@ -66,17 +85,17 @@ export interface MeasureStatus {
   state: 'empty' | 'ok' | 'short' | 'long'
 }
 
-export function measureStatus(m: Measure): MeasureStatus {
+export function measureStatus(m: Measure, meter: Meter = DEFAULT_METER): MeasureStatus {
   const units = measureUnits(m)
-  const diff = units - MEASURE_UNITS
+  const diff = units - measureCapacity(meter)
   if (m.length === 0) return { units, diff, state: 'empty' }
   if (diff === 0) return { units, diff, state: 'ok' }
   return { units, diff, state: diff < 0 ? 'short' : 'long' }
 }
 
-/** Texto en tiempos de negra: "falta 1 tiempo", "sobra ½ tiempo". */
-export function describeDiff(diff: number): string {
-  const beats = Math.abs(diff) / 4
+/** Texto en tiempos: "falta 1 tiempo", "sobra ½ tiempo" (en 6/8 el tiempo es la corchea). */
+export function describeDiff(diff: number, meter: Meter = DEFAULT_METER): string {
+  const beats = Math.abs(diff) / (meterParts(meter).beatType === 8 ? 2 : 4)
   const whole = Math.floor(beats)
   const frac = beats - whole
   let txt = ''
@@ -147,12 +166,14 @@ export interface PlayEvent {
   slurToNext: boolean
 }
 
-/** Convierte la partitura en eventos de reproducción (cada compás empieza en su propio múltiplo de 16). */
+/** Convierte la partitura en eventos de reproducción (cada compás ocupa al menos su capacidad según la métrica). */
 export function buildEvents(
   measures: Measure[],
   transposition: Transposition,
   range?: { start: number; end: number } | null,
+  meter: Meter = DEFAULT_METER,
 ): { events: PlayEvent[]; totalUnits: number } {
+  const capacity = measureCapacity(meter)
   const first = range ? Math.max(0, range.start) : 0
   const last = range ? Math.min(measures.length - 1, range.end) : measures.length - 1
   const events: PlayEvent[] = []
@@ -179,7 +200,7 @@ export function buildEvents(
       t += dur
     })
     // Cada compás ocupa al menos un compás completo para que el cursor y el metrónomo no se desfasen.
-    cursor += Math.max(MEASURE_UNITS, t - cursor)
+    cursor += Math.max(capacity, t - cursor)
   }
   return { events, totalUnits: cursor }
 }

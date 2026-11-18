@@ -2,6 +2,8 @@
 export type Duration = 'w' | 'h' | 'q' | '8' | '16'
 export type Accidental = '' | '#' | 'b' | 'n'
 export type Transposition = 'Bb' | 'C'
+/** Compás (métrica) de toda la partitura. */
+export type Meter = '2/4' | '3/4' | '4/4' | '6/8'
 
 export interface Note {
   id: string
@@ -70,6 +72,8 @@ export interface Score {
   measures: Measure[]
   bpm: number
   transposition: Transposition
+  /** Métrica; si falta, 4/4 (partituras guardadas antes de existir esta opción). */
+  meter?: Meter
   /** Capa vectorial superior de anotaciones libres. */
   annotations?: Annotation[]
   /** Partitura escaneada de fondo (opcional). */

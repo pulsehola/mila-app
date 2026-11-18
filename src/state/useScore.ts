@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Annotation, Background, Measure, Score } from '../types'
 import { emptyScore } from './examples'
-import { MEASURE_UNITS, measureUnits } from './music'
+import { isMeter, measureCapacity, measureUnits } from './music'
 
 const KEY = 'mila:v1'
 const MAX_MEASURES = 64
@@ -65,6 +65,7 @@ export function normalizeScore(raw: unknown): Score | null {
     title: typeof s.title === 'string' ? s.title : 'Sin título',
     bpm: typeof s.bpm === 'number' ? Math.max(30, Math.min(240, Math.round(s.bpm))) : 96,
     transposition: s.transposition === 'C' ? 'C' : 'Bb',
+    ...(isMeter(s.meter) && s.meter !== '4/4' ? { meter: s.meter } : {}),
     measures: measures as Measure[],
   }
 }
@@ -82,10 +83,10 @@ function load(): Score {
   return emptyScore()
 }
 
-/** Añade un compás vacío al final si el último ya está completo. */
-function withTrailingMeasure(measures: Measure[]): Measure[] {
+/** Añade un compás vacío al final si el último ya está completo (según la métrica). */
+function withTrailingMeasure(measures: Measure[], capacity: number): Measure[] {
   const last = measures[measures.length - 1]
-  if (last && measureUnits(last) >= MEASURE_UNITS && measures.length < MAX_MEASURES) {
+  if (last && measureUnits(last) >= capacity && measures.length < MAX_MEASURES) {
     return [...measures, []]
   }
   return measures
@@ -105,7 +106,7 @@ export interface ScoreApi {
   /** Reemplaza los compases. `record=false` aplica un cambio transitorio (p.ej. arrastre) sin historial. */
   setMeasures: (fn: (m: Measure[]) => Measure[], record?: boolean) => void
   setAnnotations: (fn: (a: Annotation[]) => Annotation[], record?: boolean) => void
-  patch: (p: Partial<Pick<Score, 'bpm' | 'transposition' | 'title'>>) => void
+  patch: (p: Partial<Pick<Score, 'bpm' | 'transposition' | 'title' | 'meter'>>) => void
   /** Fondo escaneado. `record` = guardar en deshacer (poner/quitar sí; mover un deslizador no). */
   setBackground: (bg: Background | undefined, record?: boolean) => void
   replace: (s: Score) => void
@@ -152,7 +153,7 @@ export function useScore(): ScoreApi {
 
   const setMeasures = useCallback((fn: (m: Measure[]) => Measure[], record = true) => {
     const prev = scoreRef.current.measures
-    const next = withTrailingMeasure(fn(prev))
+    const next = withTrailingMeasure(fn(prev), measureCapacity(scoreRef.current.meter))
     if (next === prev) return
     if (record) push(snap())
     // Las anotaciones de compases que desaparecen se descartan.
@@ -182,7 +183,7 @@ export function useScore(): ScoreApi {
     force((n) => n + 1)
   }, [])
 
-  const patch = useCallback((p: Partial<Pick<Score, 'bpm' | 'transposition' | 'title'>>) => {
+  const patch = useCallback((p: Partial<Pick<Score, 'bpm' | 'transposition' | 'title' | 'meter'>>) => {
     setScore((s) => ({ ...s, ...p }))
   }, [])
 

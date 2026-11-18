@@ -73,6 +73,12 @@ export function recognizePersonal(strokes: Stroke[], staff: StaffCtx, templates:
   const tm = matchTemplates(strokes, templates)
   if (!tm || tm.score < TPL_ACCEPT || tm.margin < TPL_MARGIN) return heur
   if (labelOf(heur) === tm.label) return heur
+  // Rellena o hueca lo decide la tinta medida dentro de la cabeza, nunca la plantilla: una plantilla no
+  // distingue bien un garabato relleno de un círculo, y así una negra no puede leerse como blanca.
+  if (heur.kind === 'note' && tm.label.startsWith('note:')) {
+    const hollow = (d: string) => d === 'w' || d === 'h'
+    if (hollow(heur.dur) !== hollow(tm.label.slice(5))) return heur
+  }
   if (heur.kind === 'unknown' || tm.score >= TPL_OVERRIDE) {
     const r = fromLabel(tm.label, strokes, staff, tm.score)
     // Conserva la alteración que las reglas hubieran separado a la izquierda de la cabeza.

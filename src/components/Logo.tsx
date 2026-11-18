@@ -8,13 +8,15 @@ interface Props {
   /** Cuando suena la música las ondas aceleran. */
   playing?: boolean
   className?: string
+  /** Rebote al tocarlo (solo en la bienvenida; en la barra superior Safari podía dejarlo deformado). */
+  interactive?: boolean
 }
 
 /**
  * Isotipo MI-LA: dos corcheas unidas sobre un pentagrama. La de abajo es un MI (primera línea, verde menta)
  * y la de arriba un LA (segundo espacio, latón). Las ondas respiran y aceleran al reproducir.
  */
-export function Logo({ size = 40, playing = false, className }: Props) {
+export function Logo({ size = 40, playing = false, className, interactive = true }: Props) {
   const speed = playing ? 0.9 : 2.4
   const spring = { type: 'spring' as const, stiffness: 520, damping: 13 }
   return (
@@ -22,10 +24,13 @@ export function Logo({ size = 40, playing = false, className }: Props) {
       width={size}
       height={size}
       className={className}
+      // Tamaño fijo y cuadrado también por CSS: ningún contenedor flex puede estirarlo ni aplastarlo.
+      style={{ width: size, height: size, minWidth: size, minHeight: size, flex: 'none', aspectRatio: '1 / 1', display: 'block' }}
       viewBox="0 0 64 64"
+      preserveAspectRatio="xMidYMid meet"
       role="img"
       aria-label="MILA"
-      whileTap={{ scale: 0.9, rotate: -6 }}
+      whileTap={interactive ? { scale: 0.9, rotate: -6 } : undefined}
       transition={{ type: 'spring', stiffness: 500, damping: 14 }}
     >
       <rect width="64" height="64" rx="18" fill={BRAND.ink} />
@@ -52,30 +57,34 @@ export function Logo({ size = 40, playing = false, className }: Props) {
         transition={{ duration: 0.35, delay: 0.7, ease: 'easeOut' }}
       />
       {/* MI (primera línea) y LA (segundo espacio) */}
-      <motion.ellipse
-        cx="22"
-        cy="46"
-        rx="5.4"
-        ry="4"
-        transform="rotate(-22 22 46)"
-        fill={BRAND.mi}
-        initial={{ scale: 0 }}
-        animate={{ scale: 1 }}
-        transition={{ ...spring, delay: 0.05 }}
-        style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
-      />
-      <motion.ellipse
-        cx="39"
-        cy="37"
-        rx="5.4"
-        ry="4"
-        transform="rotate(-22 39 37)"
-        fill={BRAND.la}
-        initial={{ scale: 0 }}
-        animate={{ scale: 1 }}
-        transition={{ ...spring, delay: 0.2 }}
-        style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
-      />
+      {/* El giro va en un <g>: si comparte elemento con la animación de escala, el transform CSS de la
+          animación pisa el atributo y Safari descoloca/deforma la cabeza. */}
+      <g transform="rotate(-22 22 46)">
+        <motion.ellipse
+          cx="22"
+          cy="46"
+          rx="5.4"
+          ry="4"
+          fill={BRAND.mi}
+          initial={{ scale: 0 }}
+          animate={{ scale: 1 }}
+          transition={{ ...spring, delay: 0.05 }}
+          style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
+        />
+      </g>
+      <g transform="rotate(-22 39 37)">
+        <motion.ellipse
+          cx="39"
+          cy="37"
+          rx="5.4"
+          ry="4"
+          fill={BRAND.la}
+          initial={{ scale: 0 }}
+          animate={{ scale: 1 }}
+          transition={{ ...spring, delay: 0.2 }}
+          style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
+        />
+      </g>
       {[0, 1].map((i) => (
         <motion.path
           key={i}
