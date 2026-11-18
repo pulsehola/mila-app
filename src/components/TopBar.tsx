@@ -1,8 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { CircleHelp, Hand, Library, Mic, Moon, Redo2, Share2, Sun, Undo2 } from 'lucide-react'
-import { useState } from 'react'
+import { CircleHelp, Hand, LayoutGrid, Mic, Moon, Redo2, Share2, Sun, Undo2 } from 'lucide-react'
 import type { Transposition } from '../types'
-import { EXAMPLES } from '../state/examples'
 import { Logo, Wordmark } from './Logo'
 import { IconButton } from './ui'
 import { ELASTIC } from './springs'
@@ -22,13 +20,12 @@ interface Props {
   onTuner: () => void
   onExport: () => void
   onHelp: () => void
-  onExample: (key: string | 'blank') => void
+  onGallery: () => void
   fingerDraw: boolean
   onFinger: () => void
 }
 
 export function TopBar(p: Props) {
-  const [menu, setMenu] = useState(false)
   return (
     <header
       className="relative z-30 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-panel/90 px-4 py-2 backdrop-blur"
@@ -87,51 +84,9 @@ export function TopBar(p: Props) {
         <IconButton label="Rehacer (⇧⌘Z)" onClick={p.onRedo} disabled={!p.canRedo} size={44}>
           <Redo2 size={20} />
         </IconButton>
-        <div className="relative">
-          <IconButton label="Melodías de ejemplo" onClick={() => setMenu((v) => !v)} active={menu} tone="sun" size={44}>
-            <Library size={20} />
-          </IconButton>
-          <AnimatePresence>
-            {menu && (
-              <>
-                <div className="fixed inset-0 z-40" onPointerDown={() => setMenu(false)} />
-                <motion.div
-                  className="absolute right-0 top-14 z-50 w-72 rounded-3xl border border-line bg-panel p-2 shadow-2xl"
-                  initial={{ opacity: 0, y: -8, scale: 0.94 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -8, scale: 0.94 }}
-                  transition={{ type: 'spring', stiffness: 460, damping: 28 }}
-                >
-                  <div className="px-3 pb-1 pt-2 text-[11px] font-bold uppercase tracking-widest text-muted">Cargar ejemplo</div>
-                  {EXAMPLES.map((ex) => (
-                    <button
-                      key={ex.key}
-                      type="button"
-                      onClick={() => {
-                        setMenu(false)
-                        p.onExample(ex.key)
-                      }}
-                      className="block w-full rounded-2xl px-3 py-3 text-left"
-                    >
-                      <div className="font-extrabold">🎺 {ex.name}</div>
-                      <div className="text-xs text-muted">{ex.blurb}</div>
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMenu(false)
-                      p.onExample('blank')
-                    }}
-                    className="mt-1 block w-full rounded-2xl border-t border-line px-3 py-3 text-left font-bold"
-                  >
-                    📄 Partitura en blanco
-                  </button>
-                </motion.div>
-              </>
-            )}
-          </AnimatePresence>
-        </div>
+        <IconButton label="Mis partituras" onClick={p.onGallery} tone="sun" size={44}>
+          <LayoutGrid size={20} />
+        </IconButton>
         <IconButton label="Afinador" onClick={p.onTuner} size={44}>
           <Mic size={20} />
         </IconButton>

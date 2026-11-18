@@ -22,15 +22,20 @@ import {
   writtenMidi,
 } from './state/music'
 import { useScore } from './state/useScore'
-import type { EditMode, LoopRange, Note, Transposition } from './types'
+import type { EditMode, LoopRange, Note, Score, Transposition } from './types'
+import { FOLDER_NAME, fileSlug, parseMilaFile, type SavedScore, toMilaFile } from './state/library'
+import { useLibrary } from './state/useLibrary'
+import { shareFile } from './export/share'
+import { Gallery } from './components/Gallery'
 
-type Modal = 'tuner' | 'export' | 'help' | 'clear' | null
+type Modal = 'tuner' | 'export' | 'help' | 'clear' | 'gallery' | null
 
 const NO_ANNOTATIONS: never[] = []
 
 export default function App() {
   const api = useScore()
   const { score } = api
+  const lib = useLibrary(score)
 
   const [dark, setDark] = useState(() => localStorage.getItem('mila:theme') === 'dark')
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -245,17 +250,107 @@ export default function App() {
     showToast('Partitura borrada · ⌘Z para recuperarla')
   }, [api, stopPlayback, showToast])
 
-  const loadExample = useCallback(
-    (key: string) => {
+  // ---- Galería (Mis partituras) -------------------------------------------------
+  /** Muestra otra partitura en el editor (la anterior ya quedó guardada). */
+  const showScore = useCallback(
+    (s: Score) => {
       stopPlayback()
-      const base = key === 'blank' ? emptyScore() : EXAMPLES.find((e) => e.key === key)!.build()
-      api.replace({ ...base, transposition: score.transposition as Transposition })
-      engine.setBpm(base.bpm)
+      api.open(s)
+      engine.setBpm(s.bpm)
       setSelectedId(null)
       setLoopRange(null)
-      showToast(key === 'blank' ? 'Partitura en blanco' : `Cargado: ${base.title} · ⌘Z para volver`)
+      setModeState('notes')
+      setModal(null)
     },
-    [api, score.transposition, stopPlayback, showToast],
+    [api, stopPlayback],
+  )
+
+  const openFromGallery = useCallback(
+    async (id: string) => {
+      if (id === lib.currentId) return setModal(null)
+      await lib.flush()
+      const item = await lib.openItem(id)
+      if (!item) return showToast('No encontré esa partitura', 'warn')
+      showScore(item.score)
+      showToast(`Abierta: ${item.score.title || 'Sin título'}`)
+    },
+    [lib, showScore, showToast],
+  )
+
+  const startScore = useCallback(
+    async (s: Score, msg: string) => {
+      await lib.flush()
+      lib.startNew()
+      showScore(s)
+      showToast(msg)
+    },
+    [lib, showScore, showToast],
+  )
+
+  const newScore = useCallback(
+    () => void startScore({ ...emptyScore(), transposition: score.transposition }, 'Partitura nueva'),
+    [startScore, score.transposition],
+  )
+
+  const fromExample = useCallback(
+    (key: string) => {
+      const ex = EXAMPLES.find((e) => e.key === key)
+      if (ex) void startScore({ ...ex.build(), transposition: score.transposition as Transposition }, `Nueva desde ejemplo: ${ex.name}`)
+    },
+    [startScore, score.transposition],
+  )
+
+  const duplicateItem = useCallback(
+    (item: SavedScore) =>
+      void startScore(
+        { ...item.score, title: `${item.score.title || 'Sin título'} (copia)` },
+        'Copia creada: ya puedes editarla',
+      ),
+    [startScore],
+  )
+
+  const deleteItem = useCallback(
+    async (id: string) => {
+      await lib.remove(id)
+      if (id === lib.currentId) {
+        lib.startNew()
+        api.open({ ...emptyScore(), transposition: score.transposition })
+        setSelectedId(null)
+      }
+      showToast('Partitura borrada de la galería')
+    },
+    [lib, api, score.transposition, showToast],
+  )
+
+  /** Guardar en Archivos: hoja de compartir → «Guardar en Archivos» → carpeta Mila_partituras. */
+  const saveToFiles = useCallback(
+    async (items: SavedScore[]) => {
+      await lib.flush()
+      const single = items.length === 1
+      const name = single
+        ? `${fileSlug(items[0].score.title)}.mila.json`
+        : `MILA-galeria-${new Date().toISOString().slice(0, 10)}.mila.json`
+      const file = new File([JSON.stringify(toMilaFile(items))], name, { type: 'application/json' })
+      const r = await shareFile(file, single ? items[0].score.title || 'Partitura MILA' : 'Partituras MILA')
+      if (r === 'shared') showToast(`Guardado ✓ (elige la carpeta ${FOLDER_NAME})`)
+      else if (r === 'downloaded') showToast(`Descargado: muévelo a la carpeta ${FOLDER_NAME}`)
+      else if (r === 'blocked') showToast('Toca otra vez para guardar')
+    },
+    [lib, showToast],
+  )
+
+  const importFiles = useCallback(
+    async (files: File[]) => {
+      try {
+        const all: SavedScore[] = []
+        for (const f of files) all.push(...parseMilaFile(await f.text()))
+        const n = await lib.importItems(all)
+        showToast(n ? `${n} partitura${n === 1 ? '' : 's'} añadida${n === 1 ? '' : 's'} a la galería` : 'Ya tenías esas partituras')
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'No se pudo abrir el archivo', 'warn')
+      }
+    },
+    [lib, showToast],
   )
 
   // ---- Atajos de teclado (Mac) ----------------------------------------------
@@ -354,7 +449,10 @@ export default function App() {
         onTuner={() => setModal('tuner')}
         onExport={() => setModal('export')}
         onHelp={() => setModal('help')}
-        onExample={loadExample}
+        onGallery={() => {
+          void lib.flush().then(lib.refresh)
+          setModal('gallery')
+        }}
         fingerDraw={fingerDraw}
         onFinger={() => {
           setFingerDraw((v) => !v)
@@ -447,6 +545,19 @@ export default function App() {
       <Tuner open={modal === 'tuner'} onClose={() => setModal(null)} transposition={score.transposition} />
       <ExportModal open={modal === 'export'} onClose={() => setModal(null)} score={score} onToast={showToast} />
       <HelpModal open={modal === 'help'} onClose={() => setModal(null)} />
+      <Gallery
+        open={modal === 'gallery'}
+        onClose={() => setModal(null)}
+        items={lib.items}
+        currentId={lib.currentId}
+        onOpen={(id) => void openFromGallery(id)}
+        onNew={newScore}
+        onExample={fromExample}
+        onDuplicate={duplicateItem}
+        onDelete={(id) => void deleteItem(id)}
+        onSaveToFiles={(items) => void saveToFiles(items)}
+        onImport={(files) => void importFiles(files)}
+      />
       <UiModal open={modal === 'clear'} onClose={() => setModal(null)} title="¿Borrar toda la partitura?" maxWidth={420}>
         <p className="text-sm text-muted">
           Se borran todas las notas y anotaciones y vuelve a 4 compases vacíos. El título y el tempo se mantienen.

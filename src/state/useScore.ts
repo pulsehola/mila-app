@@ -74,6 +74,8 @@ export interface ScoreApi {
   setAnnotations: (fn: (a: Annotation[]) => Annotation[], record?: boolean) => void
   patch: (p: Partial<Pick<Score, 'bpm' | 'transposition' | 'title'>>) => void
   replace: (s: Score) => void
+  /** Abre otra partitura (de la galería): empieza con historial de deshacer limpio. */
+  open: (s: Score) => void
   undo: () => void
   redo: () => void
   addMeasure: () => void
@@ -143,6 +145,14 @@ export function useScore(): ScoreApi {
     force((n) => n + 1)
   }, [])
 
+  const open = useCallback((s: Score) => {
+    undoRef.current = []
+    redoRef.current = []
+    scoreRef.current = s
+    setScore(s)
+    force((n) => n + 1)
+  }, [])
+
   const undo = useCallback(() => {
     const prev = undoRef.current.pop()
     if (!prev) return
@@ -192,6 +202,7 @@ export function useScore(): ScoreApi {
     setAnnotations,
     patch,
     replace,
+    open,
     undo,
     redo,
     addMeasure,

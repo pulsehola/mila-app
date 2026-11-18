@@ -88,6 +88,11 @@ export function HelpModal({ open, onClose }: { open: boolean; onClose: () => voi
             <b>Goma</b>: toca una nota o pasa por encima de varias para borrarlas (también anotaciones). La papelera de al
             lado borra toda la partitura, con confirmación; <kbd>⌘Z</kbd> la recupera.
           </li>
+          <li>
+            <b>Mis partituras</b> (botón de cuadrícula arriba): todo se guarda solo en este iPad. Toca una tarjeta para
+            seguir editándola. Para tener copia en la app Archivos usa «Guardar en Archivos» y elige la carpeta
+            Mila_partituras (créala la primera vez); «Abrir desde Archivos» las trae de vuelta.
+          </li>
           <li>El punto junto a cada compás avisa si faltan o sobran tiempos (4/4).</li>
           <li>
             Mac: <kbd>Espacio</kbd> play/pausa · <kbd>⌘Z</kbd> deshacer · <kbd>⇧⌘Z</kbd> rehacer · <kbd>⌫</kbd> borra la nota · <kbd>↑ ↓</kbd> tono ·{' '}
