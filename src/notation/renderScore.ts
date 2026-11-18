@@ -60,6 +60,8 @@ export interface RenderOptions {
   measureNumbers?: boolean
   /** Muestra el 4/4 en el primer compás (false en páginas de continuación). */
   timeSig?: boolean
+  /** Separación entre sistemas (px); por defecto ROW_H. Con fondo escaneado se ajusta al papel. */
+  rowH?: number
 }
 
 export function computePerRow(width: number): number {
@@ -77,7 +79,8 @@ export function renderScore(container: HTMLElement, measures: Measure[], opts: R
   const extras = CLEF_W + (showTime ? TIME_W : 0)
   const baseW = (inner - extras) / perRow
   const rowCount = Math.max(1, Math.ceil(measures.length / perRow))
-  const height = TOP_PAD + rowCount * ROW_H + 24
+  const rowH = opts.rowH ?? ROW_H
+  const height = TOP_PAD + rowCount * rowH + 24
 
   const renderer = new Renderer(container as HTMLDivElement, Renderer.Backends.SVG)
   renderer.resize(width, height)
@@ -87,7 +90,7 @@ export function renderScore(container: HTMLElement, measures: Measure[], opts: R
 
   for (let row = 0; row < rowCount; row++) {
     let x = SIDE_PAD
-    const y = TOP_PAD - 40 + row * ROW_H // la línea superior queda 40 px por debajo
+    const y = TOP_PAD - 40 + row * rowH // la línea superior queda 40 px por debajo
     let rowTop = 0
     let rowBottom = 0
     for (let c = 0; c < perRow; c++) {

@@ -120,3 +120,19 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Partitura escaneada de fondo: el blanco del papel se funde con la hoja (multiply);
+   en modo oscuro se invierte para que la tinta del papel se vea clara. */
+.scan-bg {
+  mix-blend-mode: multiply;
+}
+.scan-bg.enhance {
+  filter: grayscale(1) contrast(1.5) brightness(1.06);
+}
+.dark .scan-bg {
+  mix-blend-mode: screen;
+  filter: invert(1) hue-rotate(180deg);
+}
+.dark .scan-bg.enhance {
+  filter: grayscale(1) contrast(1.5) brightness(1.06) invert(1);
+}

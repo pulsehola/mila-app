@@ -1,11 +1,12 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Check, Copy, FolderDown, FolderUp, PenLine, Plus, Trash2 } from 'lucide-react'
+import { Camera, Check, Copy, FolderDown, FolderUp, PenLine, Plus, ScanLine, Trash2 } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Score } from '../types'
 import { drawAnnotations } from '../notation/annotations'
 import { renderScore } from '../notation/renderScore'
 import { EXAMPLES } from '../state/examples'
 import { FOLDER_NAME, noteCount, type SavedScore, usedMeasures } from '../state/library'
+import { useImageUrl } from '../state/useImageUrl'
 import { ELASTIC } from './springs'
 import { Modal } from './ui'
 
@@ -21,21 +22,25 @@ interface Props {
   onDelete: (id: string) => void
   onSaveToFiles: (items: SavedScore[]) => void
   onImport: (files: File[]) => void
+  onScan: () => void
 }
 
 const THUMB_W = 560
 
-/** Miniatura real: los dos primeros sistemas con sus notas y anotaciones. */
+/** Miniatura real: los primeros sistemas con sus notas, anotaciones y, si la hay, la partitura escaneada. */
 function ScoreThumb({ score }: { score: Score }) {
   const host = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const [h, setH] = useState(300)
+  const bg = score.background
+  const bgUrl = useImageUrl(bg?.imageId)
+  const W = bg ? bg.layoutWidth : THUMB_W
 
   useLayoutEffect(() => {
     const el = host.current
     if (!el) return
-    const measures = score.measures.slice(0, 4)
-    const l = renderScore(el, measures, { width: THUMB_W, perRow: 2 })
+    const measures = bg ? score.measures.slice(0, bg.perRow * 3) : score.measures.slice(0, 4)
+    const l = renderScore(el, measures, bg ? { width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH } : { width: THUMB_W, perRow: 2 })
     // VexFlow fija el tamaño en píxeles del contenedor: aquí debe adaptarse al ancho de la tarjeta.
     el.style.width = ''
     el.style.height = ''
@@ -57,10 +62,25 @@ function ScoreThumb({ score }: { score: Score }) {
       const color = getComputedStyle(c).getPropertyValue('--annot').trim() || '#2f62d6'
       drawAnnotations(ctx, score.annotations ?? [], l, color)
     }
-  }, [score])
+  }, [score, bg])
 
+  const cropH = bg ? Math.min(Math.max(h, 300), W * 0.62) : Math.min(h, 330)
   return (
-    <div className="relative w-full overflow-hidden" style={{ aspectRatio: `${THUMB_W} / ${Math.min(h, 330)}` }}>
+    <div className="relative w-full overflow-hidden" style={{ aspectRatio: `${W} / ${cropH}` }}>
+      {bg && bgUrl && (
+        <img
+          src={bgUrl}
+          alt=""
+          className={`scan-bg pointer-events-none absolute max-w-none ${bg.enhance ? 'enhance' : ''}`}
+          style={{
+            left: `${(bg.x / W) * 100}%`,
+            top: `${(bg.y / cropH) * 100}%`,
+            width: `${bg.scale * 100}%`,
+            opacity: bg.opacity,
+            transform: bg.rotation ? `rotate(${bg.rotation}deg)` : undefined,
+          }}
+        />
+      )}
       <div ref={host} className="score-svg pointer-events-none absolute inset-x-0 top-0" />
       <canvas ref={canvas} className="pointer-events-none absolute inset-x-0 top-0 w-full" />
     </div>
@@ -125,6 +145,11 @@ function Card({
         {current && (
           <span className="absolute left-2 top-2 rounded-full bg-mi px-2 py-0.5 text-[11px] font-extrabold text-white">
             Abierta
+          </span>
+        )}
+        {s.background && (
+          <span className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-la px-2 py-0.5 text-[11px] font-extrabold text-[#2b2118]">
+            <ScanLine size={11} /> Escaneada
           </span>
         )}
       </motion.button>
@@ -257,6 +282,20 @@ export function Gallery(p: Props) {
             <Plus size={28} strokeWidth={2.6} />
           </span>
           <span className="text-base font-extrabold text-ink">Nueva partitura</span>
+        </motion.button>
+        <motion.button
+          type="button"
+          onClick={p.onScan}
+          whileTap={{ scale: 0.96 }}
+          whileHover={{ scale: 1.02 }}
+          transition={ELASTIC}
+          className="flex min-h-[190px] flex-col items-center justify-center gap-2 rounded-3xl border-2 border-dashed border-line bg-panel px-4 text-center text-muted"
+        >
+          <span className="grid h-14 w-14 place-items-center rounded-full bg-la text-white shadow-lg">
+            <Camera size={26} strokeWidth={2.4} />
+          </span>
+          <span className="text-base font-extrabold text-ink">Escanear o importar</span>
+          <span className="text-xs">Foto de tu partitura de papel o un PDF</span>
         </motion.button>
         <AnimatePresence initial={false}>
           {p.items.map((it) => (

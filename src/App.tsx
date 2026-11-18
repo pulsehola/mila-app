@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Minus, Plus, Trash2 } from 'lucide-react'
+import { ImageIcon, Minus, Plus, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createTapTempo, engine } from './audio/engine'
 import { ArticulationPalette } from './components/ArticulationPalette'
@@ -22,15 +22,32 @@ import {
   writtenMidi,
 } from './state/music'
 import { useScore } from './state/useScore'
-import type { EditMode, LoopRange, Note, Score, Transposition } from './types'
+import type { Background, EditMode, LoopRange, Note, Score, Transposition } from './types'
 import { FOLDER_NAME, fileSlug, parseMilaFile, type SavedScore, toMilaFile } from './state/library'
 import { useLibrary } from './state/useLibrary'
 import { shareFile } from './export/share'
 import { Gallery } from './components/Gallery'
+import { BackgroundPanel } from './components/BackgroundPanel'
+import { ScanSheet } from './components/ScanSheet'
+import { fileToScan } from './scan/importScan'
+import { blobToDataUrl, dataUrlToBlob, deleteImage, getImage, imageIdsOf, parseMilaImages, putImage } from './state/library'
+import { newId } from './state/music'
+import { useImageUrl } from './state/useImageUrl'
+import { TOP_PAD } from './notation/renderScore'
 
-type Modal = 'tuner' | 'export' | 'help' | 'clear' | 'gallery' | null
+type Modal = 'tuner' | 'export' | 'help' | 'clear' | 'gallery' | 'scan' | null
 
 const NO_ANNOTATIONS: never[] = []
+
+/** Ancho fijo de la hoja digital cuando hay partitura escaneada (se escala a la pantalla). */
+const SCAN_LAYOUT_W = 900
+
+/** Compases necesarios para que los pentagramas digitales cubran toda la partitura escaneada. */
+function measuresToCover(bg: Background): number {
+  const bottom = bg.y + bg.layoutWidth * bg.scale * (bg.naturalH / bg.naturalW)
+  const rows = Math.max(1, Math.ceil((bottom - TOP_PAD - 24) / bg.rowH))
+  return Math.min(64, rows * bg.perRow)
+}
 
 export default function App() {
   const api = useScore()
@@ -47,6 +64,10 @@ export default function App() {
   const [loopRange, setLoopRange] = useState<LoopRange | null>(null)
   const [modal, setModal] = useState<Modal>(null)
   const [fingerDraw, setFingerDraw] = useState(false)
+  const [adjustBg, setAdjustBg] = useState(false)
+  const [bgPanel, setBgPanel] = useState(false)
+  const [scanBusy, setScanBusy] = useState(false)
+  const bgUrl = useImageUrl(score.background?.imageId)
   const [mode, setModeState] = useState<EditMode>('notes')
   const [toast, setToast] = useState<{ msg: string; tone: 'info' | 'warn' } | null>(null)
   const transportRef = useRef<TransportHandle>(null)
@@ -260,6 +281,8 @@ export default function App() {
       setSelectedId(null)
       setLoopRange(null)
       setModeState('notes')
+      setAdjustBg(false)
+      setBgPanel(false)
       setModal(null)
     },
     [api, stopPlayback],
@@ -311,7 +334,14 @@ export default function App() {
 
   const deleteItem = useCallback(
     async (id: string) => {
+      // Su imagen escaneada se borra solo si ninguna otra partitura la usa.
+      const imageId = lib.items.find((x) => x.id === id)?.score.background?.imageId
+      const shared =
+        !!imageId &&
+        (lib.items.some((x) => x.id !== id && x.score.background?.imageId === imageId) ||
+          (id !== lib.currentId && score.background?.imageId === imageId))
       await lib.remove(id)
+      if (imageId && !shared) void deleteImage(imageId).catch(() => undefined)
       if (id === lib.currentId) {
         lib.startNew()
         api.open({ ...emptyScore(), transposition: score.transposition })
@@ -319,7 +349,7 @@ export default function App() {
       }
       showToast('Partitura borrada de la galería')
     },
-    [lib, api, score.transposition, showToast],
+    [lib, api, score.transposition, score.background, showToast],
   )
 
   /** Guardar en Archivos: hoja de compartir → «Guardar en Archivos» → carpeta Mila_partituras. */
@@ -330,7 +360,13 @@ export default function App() {
       const name = single
         ? `${fileSlug(items[0].score.title)}.mila.json`
         : `MILA-galeria-${new Date().toISOString().slice(0, 10)}.mila.json`
-      const file = new File([JSON.stringify(toMilaFile(items))], name, { type: 'application/json' })
+      // Las partituras escaneadas viajan con su imagen dentro del archivo.
+      const images: Record<string, string> = {}
+      for (const id of imageIdsOf(items)) {
+        const blob = await getImage(id).catch(() => undefined)
+        if (blob) images[id] = await blobToDataUrl(blob)
+      }
+      const file = new File([JSON.stringify(toMilaFile(items, images))], name, { type: 'application/json' })
       const r = await shareFile(file, single ? items[0].score.title || 'Partitura MILA' : 'Partituras MILA')
       if (r === 'shared') showToast(`Guardado ✓ (elige la carpeta ${FOLDER_NAME})`)
       else if (r === 'downloaded') showToast(`Descargado: muévelo a la carpeta ${FOLDER_NAME}`)
@@ -343,7 +379,13 @@ export default function App() {
     async (files: File[]) => {
       try {
         const all: SavedScore[] = []
-        for (const f of files) all.push(...parseMilaFile(await f.text()))
+        for (const f of files) {
+          const text = await f.text()
+          all.push(...parseMilaFile(text))
+          for (const [id, url] of Object.entries(parseMilaImages(text))) {
+            if (!(await getImage(id).catch(() => undefined))) await putImage(id, await dataUrlToBlob(url))
+          }
+        }
         const n = await lib.importItems(all)
         showToast(n ? `${n} partitura${n === 1 ? '' : 's'} añadida${n === 1 ? '' : 's'} a la galería` : 'Ya tenías esas partituras')
       } catch (e) {
@@ -352,6 +394,71 @@ export default function App() {
     },
     [lib, showToast],
   )
+
+  // ---- Partitura escaneada de fondo -------------------------------------------
+  /** Cambia el fondo y, si hace falta, añade compases para que el pentagrama cubra todo el papel. */
+  const onBackground = useCallback(
+    (bg: Background, record = false) => {
+      api.setBackground(bg, record)
+      const need = measuresToCover(bg)
+      if (need > score.measures.length) {
+        api.setMeasures((ms) => [...ms, ...Array.from({ length: need - ms.length }, () => [])], false)
+      }
+    },
+    [api, score.measures.length],
+  )
+
+  const handleScanFile = useCallback(
+    async (file: File) => {
+      setScanBusy(true)
+      try {
+        const r = await fileToScan(file)
+        const imageId = newId()
+        await putImage(imageId, r.blob)
+        const bg: Background = {
+          imageId,
+          naturalW: r.width,
+          naturalH: r.height,
+          layoutWidth: SCAN_LAYOUT_W,
+          rowH: 160,
+          perRow: 4,
+          x: 0,
+          y: 0,
+          scale: 1,
+          rotation: 0,
+          opacity: 0.6,
+          enhance: true,
+        }
+        const blank = score.measures.every((m) => m.length === 0) && !(score.annotations ?? []).length && !score.background
+        const measures = Array.from({ length: measuresToCover(bg) }, () => [])
+        if (blank) {
+          // Hoja vacía: el escaneo se queda en esta misma partitura.
+          stopPlayback()
+          api.open({ ...score, title: score.title === 'Sin título' ? r.title : score.title, measures, background: bg })
+        } else {
+          await startScore({ ...emptyScore(), title: r.title, transposition: score.transposition, measures, background: bg }, '')
+        }
+        setModal(null)
+        setMode('notes')
+        setBgPanel(true)
+        setAdjustBg(true)
+        const pages = r.pages && r.pages.total > r.pages.used ? ` (se usaron ${r.pages.used} de ${r.pages.total} páginas)` : ''
+        showToast(`Arrastra la hoja y ajusta el tamaño hasta que el pentagrama coincida${pages}`)
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'No se pudo importar la partitura', 'warn')
+      } finally {
+        setScanBusy(false)
+      }
+    },
+    [api, score, startScore, stopPlayback, setMode, showToast],
+  )
+
+  const removeBackground = useCallback(() => {
+    api.setBackground(undefined, true)
+    setAdjustBg(false)
+    setBgPanel(false)
+    showToast('Fondo quitado · ⌘Z para recuperarlo')
+  }, [api, showToast])
 
   // ---- Atajos de teclado (Mac) ----------------------------------------------
   const kb = useRef<Record<string, (e: KeyboardEvent) => void>>({})
@@ -491,7 +598,29 @@ export default function App() {
             onBadge={onBadge}
             onToast={showToast}
             onEdit={stopPlayback}
+            background={score.background}
+            bgUrl={bgUrl}
+            adjustBg={adjustBg && !!score.background}
+            onBackground={onBackground}
+            onScan={() => setModal('scan')}
           />
+          <AnimatePresence>
+            {bgPanel && score.background && (
+              <div className="pointer-events-none absolute right-4 top-3 z-40">
+                <BackgroundPanel
+                  bg={score.background}
+                  adjust={adjustBg}
+                  onAdjust={setAdjustBg}
+                  onChange={onBackground}
+                  onRemove={removeBackground}
+                  onClose={() => {
+                    setBgPanel(false)
+                    setAdjustBg(false)
+                  }}
+                />
+              </div>
+            )}
+          </AnimatePresence>
           <div className="pointer-events-none absolute bottom-3 left-4 z-30 flex items-center gap-2">
             <ModeSwitch mode={mode} onMode={setMode} />
             <motion.button
@@ -505,6 +634,21 @@ export default function App() {
             >
               <Trash2 size={18} />
             </motion.button>
+            {score.background && (
+              <motion.button
+                type="button"
+                aria-label="Ajustar partitura de fondo"
+                title="Ajustar partitura de fondo"
+                aria-pressed={bgPanel}
+                onClick={() => setBgPanel((v) => !v)}
+                whileTap={{ scale: 0.86 }}
+                transition={ELASTIC}
+                className="pointer-events-auto flex h-11 items-center gap-1.5 rounded-full border border-line px-3 text-sm font-extrabold shadow"
+                style={{ background: bgPanel ? 'var(--la)' : 'var(--panel)', color: bgPanel ? '#2b2118' : 'var(--ink)' }}
+              >
+                <ImageIcon size={17} /> Fondo
+              </motion.button>
+            )}
           </div>
           <div className="pointer-events-none absolute bottom-3 right-4 z-30 flex gap-2">
             <button
@@ -545,6 +689,7 @@ export default function App() {
       <Tuner open={modal === 'tuner'} onClose={() => setModal(null)} transposition={score.transposition} />
       <ExportModal open={modal === 'export'} onClose={() => setModal(null)} score={score} onToast={showToast} />
       <HelpModal open={modal === 'help'} onClose={() => setModal(null)} />
+      <ScanSheet open={modal === 'scan'} busy={scanBusy} onClose={() => setModal(null)} onFile={(f) => void handleScanFile(f)} />
       <Gallery
         open={modal === 'gallery'}
         onClose={() => setModal(null)}
@@ -557,6 +702,7 @@ export default function App() {
         onDelete={(id) => void deleteItem(id)}
         onSaveToFiles={(items) => void saveToFiles(items)}
         onImport={(files) => void importFiles(files)}
+        onScan={() => setModal('scan')}
       />
       <UiModal open={modal === 'clear'} onClose={() => setModal(null)} title="¿Borrar toda la partitura?" maxWidth={420}>
         <p className="text-sm text-muted">

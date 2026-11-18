@@ -38,6 +38,31 @@ export interface Annotation {
   pen: boolean
 }
 
+/**
+ * Partitura escaneada (foto o PDF) como fondo de la hoja. La imagen vive en el almacén del dispositivo
+ * (`imageId`); aquí solo se guarda cómo se coloca. Con fondo, la hoja digital se dibuja siempre con el mismo
+ * ancho y espaciado para que no se desalinee al girar el iPad.
+ */
+export interface Background {
+  imageId: string
+  /** Tamaño en píxeles de la imagen guardada. */
+  naturalW: number
+  naturalH: number
+  /** Ancho de la hoja digital (px de layout) con el que se alineó. */
+  layoutWidth: number
+  /** Separación entre sistemas (px) y compases por línea de la hoja digital, para casar con el papel. */
+  rowH: number
+  perRow: number
+  /** Colocación de la imagen, en px de layout: esquina superior izquierda, escala (1 = ancho de la hoja) y giro. */
+  x: number
+  y: number
+  scale: number
+  rotation: number
+  opacity: number
+  /** Realzar: escala de grises + contraste (la foto parece un escaneo limpio). */
+  enhance: boolean
+}
+
 export interface Score {
   title: string
   measures: Measure[]
@@ -45,6 +70,8 @@ export interface Score {
   transposition: Transposition
   /** Capa vectorial superior de anotaciones libres. */
   annotations?: Annotation[]
+  /** Partitura escaneada de fondo (opcional). */
+  background?: Background
 }
 
 export type EditMode = 'notes' | 'annotate' | 'erase'

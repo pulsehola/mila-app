@@ -93,6 +93,11 @@ export function HelpModal({ open, onClose }: { open: boolean; onClose: () => voi
             seguir editándola. Para tener copia en la app Archivos usa «Guardar en Archivos» y elige la carpeta
             Mila_partituras (créala la primera vez); «Abrir desde Archivos» las trae de vuelta.
           </li>
+          <li>
+            <b>Escanear</b> (en Mis partituras o en una hoja vacía): haz una foto o sube un PDF de tu partitura de papel.
+            Queda de fondo; con <b>Fondo</b> ajusta tamaño, giro y separación entre pentagramas hasta que las líneas
+            coincidan, y escribe, anota o borra encima. Al exportar sale tal cual se ve.
+          </li>
           <li>El punto junto a cada compás avisa si faltan o sobran tiempos (4/4).</li>
           <li>
             Mac: <kbd>Espacio</kbd> play/pausa · <kbd>⌘Z</kbd> deshacer · <kbd>⇧⌘Z</kbd> rehacer · <kbd>⌫</kbd> borra la nota · <kbd>↑ ↓</kbd> tono ·{' '}

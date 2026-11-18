@@ -15,6 +15,8 @@ export interface MilaFile {
   version: 1
   exportedAt: number
   scores: SavedScore[]
+  /** Imágenes de fondo (escaneos) como data-URL, por id. */
+  images?: Record<string, string>
 }
 
 export const FOLDER_NAME = 'Mila_partituras'
@@ -34,8 +36,25 @@ export function usedMeasures(s: Score): number {
 
 // ---- Archivos .mila.json ---------------------------------------------------
 
-export function toMilaFile(scores: SavedScore[]): MilaFile {
-  return { app: 'MILA', version: 1, exportedAt: Date.now(), scores }
+export function toMilaFile(scores: SavedScore[], images?: Record<string, string>): MilaFile {
+  return { app: 'MILA', version: 1, exportedAt: Date.now(), scores, ...(images && Object.keys(images).length ? { images } : {}) }
+}
+
+/** Ids de las imágenes de fondo que usan estas partituras. */
+export function imageIdsOf(scores: SavedScore[]): string[] {
+  return [...new Set(scores.map((s) => s.score.background?.imageId).filter((x): x is string => !!x))]
+}
+
+/** Imágenes incluidas en un archivo .mila.json (data-URL por id). */
+export function parseMilaImages(text: string): Record<string, string> {
+  try {
+    const raw = JSON.parse(text) as Partial<MilaFile>
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(raw.images ?? {})) if (typeof v === 'string' && v.startsWith('data:image/')) out[k] = v
+    return out
+  } catch {
+    return {}
+  }
 }
 
 /** Lee un archivo exportado por MILA. Valida cada partitura; descarta lo que no reconoce. */
@@ -84,14 +103,16 @@ export function fileSlug(title: string): string {
 
 const DB_NAME = 'mila'
 const STORE = 'scores'
+const IMAGES = 'images'
 let dbPromise: Promise<IDBDatabase> | null = null
 
 function db(): Promise<IDBDatabase> {
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, 1)
+      const req = indexedDB.open(DB_NAME, 2)
       req.onupgradeneeded = () => {
         if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE, { keyPath: 'id' })
+        if (!req.result.objectStoreNames.contains(IMAGES)) req.result.createObjectStore(IMAGES)
       }
       req.onsuccess = () => resolve(req.result)
       req.onerror = () => {
@@ -103,12 +124,16 @@ function db(): Promise<IDBDatabase> {
   return dbPromise
 }
 
-function run<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBRequest<T> | void): Promise<T> {
+function run<T>(
+  mode: IDBTransactionMode,
+  fn: (store: IDBObjectStore) => IDBRequest<T> | void,
+  storeName: string = STORE,
+): Promise<T> {
   return db().then(
     (d) =>
       new Promise<T>((resolve, reject) => {
-        const tx = d.transaction(STORE, mode)
-        const req = fn(tx.objectStore(STORE))
+        const tx = d.transaction(storeName, mode)
+        const req = fn(tx.objectStore(storeName))
         tx.oncomplete = () => resolve(req ? req.result : (undefined as T))
         tx.onerror = () => reject(tx.error)
         tx.onabort = () => reject(tx.error)
@@ -152,4 +177,32 @@ export async function putMany(items: SavedScore[]): Promise<void> {
 
 export async function deleteScore(id: string): Promise<void> {
   await run('readwrite', (s) => s.delete(id))
+}
+
+// ---- Imágenes de fondo (escaneos) -------------------------------------------
+
+export async function putImage(id: string, blob: Blob): Promise<void> {
+  askPersist()
+  await run('readwrite', (s) => s.put(blob, id), IMAGES)
+}
+
+export function getImage(id: string): Promise<Blob | undefined> {
+  return run<Blob | undefined>('readonly', (s) => s.get(id), IMAGES)
+}
+
+export async function deleteImage(id: string): Promise<void> {
+  await run('readwrite', (s) => s.delete(id), IMAGES)
+}
+
+export function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(String(r.result))
+    r.onerror = () => reject(r.error)
+    r.readAsDataURL(blob)
+  })
+}
+
+export async function dataUrlToBlob(url: string): Promise<Blob> {
+  return (await fetch(url)).blob()
 }

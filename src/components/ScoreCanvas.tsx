@@ -1,6 +1,6 @@
 import { animate, AnimatePresence, motion } from 'framer-motion'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { Annotation, EditMode, LoopRange, Measure, Note, Pt, Stroke, Transposition } from '../types'
+import type { Annotation, Background, EditMode, LoopRange, Measure, Note, Pt, Stroke, Transposition } from '../types'
 import { engine } from '../audio/engine'
 import { bbox } from '../recognition/geometry'
 import {
@@ -32,6 +32,8 @@ import {
   shouldJoin,
 } from '../notation/annotations'
 import { drawStroke } from './ink'
+import { ELASTIC } from './springs'
+import { Camera } from 'lucide-react'
 
 /** Pausa natural del lápiz antes de reconocer: permite encadenar cabeza + plica + corchete sin cortes. */
 const RECOGNIZE_DELAY = 600
@@ -59,6 +61,14 @@ interface Props {
   onBadge: (measure: number) => void
   onToast: (msg: string, tone?: 'info' | 'warn') => void
   onEdit: () => void
+  /** Partitura escaneada de fondo y su imagen (object URL). */
+  background?: Background
+  bgUrl: string | null
+  /** Modo "mover fondo": arrastrar desplaza la imagen en vez de dibujar. */
+  adjustBg: boolean
+  onBackground: (bg: Background, record?: boolean) => void
+  /** Abre el escaneo/importación (botón de la hoja vacía). */
+  onScan: () => void
 }
 
 interface Active {
@@ -82,6 +92,7 @@ export function ScoreCanvas(p: Props) {
   const inkRef = useRef<HTMLCanvasElement>(null)
   const captureRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(900)
+  const [availH, setAvailH] = useState(700)
   const [layout, setLayout] = useState<Layout | null>(null)
   const layoutRef = useRef<Layout | null>(null)
   const annotRef = useRef<HTMLCanvasElement>(null)
@@ -94,16 +105,33 @@ export function ScoreCanvas(p: Props) {
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    const ro = new ResizeObserver(() => setWidth(Math.max(320, Math.floor(el.clientWidth - 24))))
+    const ro = new ResizeObserver(() => {
+      setWidth(Math.max(320, Math.floor(el.clientWidth - 24)))
+      setAvailH(el.clientHeight)
+    })
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
+  // ---- Fondo escaneado: hoja de ancho fijo + zoom ----------------------------
+  // Con fondo, la hoja digital se dibuja siempre con el ancho/espaciado con que se alineó al papel y se escala
+  // para caber en pantalla: así no se desalinea al girar el iPad.
+  const bg = p.background
+  const renderW = bg ? bg.layoutWidth : width
+  const zoom = bg ? width / bg.layoutWidth : 1
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
+  const bgDisplayH = bg ? bg.layoutWidth * bg.scale * (bg.naturalH / bg.naturalW) : 0
+  const paperW = layout?.width ?? renderW
+  const paperH = Math.ceil(Math.max(layout?.height ?? 300, bg ? bg.y + bgDisplayH + 24 : 0, (availH - 24) / zoom))
+  const paperRef = useRef({ w: paperW, h: paperH })
+  paperRef.current = { w: paperW, h: paperH }
 
   // ---- Render VexFlow ---------------------------------------------------
   useLayoutEffect(() => {
     const host = hostRef.current
     if (!host) return
-    const l = renderScore(host, p.measures, { width })
+    const l = renderScore(host, p.measures, bg ? { width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH } : { width })
     layoutRef.current = l
     if (import.meta.env.DEV) (window as unknown as { __milaLayout?: Layout }).__milaLayout = l
     setLayout(l)
@@ -128,7 +156,7 @@ export function ScoreCanvas(p: Props) {
       })
       if (fresh.length) setBursts((b) => [...b, ...fresh])
     }
-  }, [p.measures, width])
+  }, [p.measures, width, bg?.layoutWidth, bg?.perRow, bg?.rowH])
 
   // ---- Canvas de tinta ----------------------------------------------------
   const pendingRef = useRef<{ stroke: Stroke; pen: boolean }[]>([])
@@ -140,15 +168,16 @@ export function ScoreCanvas(p: Props) {
     const l = layoutRef.current
     if (!canvas || !l) return
     const dpr = window.devicePixelRatio || 1
-    const w = Math.round(l.width * dpr)
-    const h = Math.round(l.height * dpr)
+    const { w: pw, h: ph } = paperRef.current
+    const w = Math.round(pw * dpr)
+    const h = Math.round(ph * dpr)
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w
       canvas.height = h
     }
     const ctx = canvas.getContext('2d')!
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, l.width, l.height)
+    ctx.clearRect(0, 0, pw, ph)
     const css = getComputedStyle(canvas)
     ctx.fillStyle = css.getPropertyValue('--ink').trim() || '#2b2118'
     for (const s of pendingRef.current) drawStroke(ctx, s.stroke, s.pen, true)
@@ -186,7 +215,7 @@ export function ScoreCanvas(p: Props) {
 
   useEffect(() => {
     redrawInk()
-  }, [layout, redrawInk])
+  }, [layout, paperH, redrawInk])
 
   // ---- Capa de anotaciones (vectorial, encima de la partitura) ---------------
   /** Pinta la capa de anotaciones; las marcadas por la goma (aún sin soltar el lápiz) salen atenuadas. */
@@ -195,15 +224,16 @@ export function ScoreCanvas(p: Props) {
     const l = layoutRef.current
     if (!canvas || !l) return
     const dpr = window.devicePixelRatio || 1
-    const w = Math.round(l.width * dpr)
-    const h = Math.round(l.height * dpr)
+    const { w: pw, h: ph } = paperRef.current
+    const w = Math.round(pw * dpr)
+    const h = Math.round(ph * dpr)
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w
       canvas.height = h
     }
     const ctx = canvas.getContext('2d')!
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, l.width, l.height)
+    ctx.clearRect(0, 0, pw, ph)
     const color = getComputedStyle(canvas).getPropertyValue('--annot').trim() || '#2f62d6'
     const list = propsRef.current.annotations
     if (!fade?.size) return drawAnnotations(ctx, list, l, color)
@@ -215,7 +245,7 @@ export function ScoreCanvas(p: Props) {
 
   useEffect(() => {
     drawAnnotLayer()
-  }, [layout, p.annotations, drawAnnotLayer])
+  }, [layout, paperH, p.annotations, drawAnnotLayer])
 
   /** Copia la tinta pendiente y la encoge/desvanece hacia la nota reconocida (transición trazo → partitura). */
   const ghostInk = useCallback((cx: number, cy: number) => {
@@ -397,7 +427,8 @@ export function ScoreCanvas(p: Props) {
 
   const local = (e: { clientX: number; clientY: number }) => {
     const r = captureRef.current!.getBoundingClientRect()
-    return { x: e.clientX - r.left, y: e.clientY - r.top }
+    const z = zoomRef.current
+    return { x: (e.clientX - r.left) / z, y: (e.clientY - r.top) / z }
   }
 
   const findTarget = (x: number, y: number) => {
@@ -419,9 +450,20 @@ export function ScoreCanvas(p: Props) {
     return best
   }
 
+  // ---- Mover el fondo escaneado (modo Ajustar) -------------------------------
+  const bgDrag = useRef<{ id: number; sx: number; sy: number; x: number; y: number; recorded: boolean } | null>(null)
+
   const onPointerDown = (e: React.PointerEvent) => {
     const cur = propsRef.current
     const type = e.pointerType
+    if (cur.adjustBg && cur.background) {
+      // Con el dedo o el lápiz: arrastrar desplaza la partitura escaneada.
+      if (bgDrag.current) return
+      e.preventDefault()
+      captureRef.current!.setPointerCapture(e.pointerId)
+      bgDrag.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, x: cur.background.x, y: cur.background.y, recorded: false }
+      return
+    }
     if (type === 'pen') lastPenAt.current = performance.now()
 
     if (type === 'touch' && !cur.fingerDraw) {
@@ -546,6 +588,18 @@ export function ScoreCanvas(p: Props) {
 
   const onPointerMove = (e: React.PointerEvent) => {
     const type = e.pointerType
+    const d = bgDrag.current
+    if (d) {
+      const cur = propsRef.current
+      if (d.id !== e.pointerId || !cur.background) return
+      const z = zoomRef.current
+      cur.onBackground(
+        { ...cur.background, x: Math.round(d.x + (e.clientX - d.sx) / z), y: Math.round(d.y + (e.clientY - d.sy) / z) },
+        !d.recorded,
+      )
+      d.recorded = true
+      return
+    }
     if (type === 'pen') {
       lastPenAt.current = performance.now()
       // Pencil flotando sobre el lienzo sin tocar: Mila está a punto de seguir el trazo.
@@ -661,6 +715,10 @@ export function ScoreCanvas(p: Props) {
   }
 
   const endPointer = (e: React.PointerEvent) => {
+    if (bgDrag.current) {
+      if (bgDrag.current.id === e.pointerId) bgDrag.current = null
+      return
+    }
     if (e.pointerType === 'touch' && !propsRef.current.fingerDraw) {
       touches.current.delete(e.pointerId)
       if (touches.current.size < 2) scrollGesture.current = null
@@ -686,8 +744,9 @@ export function ScoreCanvas(p: Props) {
     if (cursorRow < 0 || !layout || !scrollRef.current) return
     const r = layout.rows[cursorRow]
     const el = scrollRef.current
-    const top = r.yTop - 70
-    const bottom = r.yBottom + 80
+    const z = zoomRef.current
+    const top = (r.yTop - 70) * z
+    const bottom = (r.yBottom + 80) * z
     if (top < el.scrollTop || bottom > el.scrollTop + el.clientHeight) {
       el.scrollTo({ top: Math.max(0, top - 20), behavior: 'smooth' })
     }
@@ -698,10 +757,38 @@ export function ScoreCanvas(p: Props) {
 
   return (
     <div ref={scrollRef} className="relative min-h-0 flex-1 overflow-auto overscroll-none" style={{ touchAction: 'pan-x pan-y' }}>
+      <div className="relative mx-auto my-3" style={{ width: paperW * zoom, height: paperH * zoom }}>
       <div
-        className="relative mx-auto my-3 rounded-[28px] border border-line bg-paper shadow-[0_10px_40px_-18px_rgba(120,70,20,0.35)] transition-colors duration-300"
-        style={{ width: layout?.width ?? width, height: layout?.height ?? 300, minHeight: 'calc(100% - 24px)' }}
+        className="absolute left-0 top-0 rounded-[28px] border border-line bg-paper shadow-[0_10px_40px_-18px_rgba(120,70,20,0.35)] transition-colors duration-300"
+        style={{
+          width: paperW,
+          height: paperH,
+          transform: zoom === 1 ? undefined : `scale(${zoom})`,
+          transformOrigin: '0 0',
+        }}
       >
+        {/* Partitura escaneada de fondo */}
+        {bg && p.bgUrl && (
+          <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[28px]">
+            <img
+              src={p.bgUrl}
+              alt=""
+              draggable={false}
+              data-testid="scan-bg"
+              className={`scan-bg absolute select-none ${bg.enhance ? 'enhance' : ''}`}
+              style={{
+                left: bg.x,
+                top: bg.y,
+                width: bg.layoutWidth * bg.scale,
+                maxWidth: 'none',
+                opacity: bg.opacity,
+                transform: bg.rotation ? `rotate(${bg.rotation}deg)` : undefined,
+                transformOrigin: 'center',
+                outline: p.adjustBg ? '3px dashed var(--coral)' : undefined,
+              }}
+            />
+          </div>
+        )}
         <div ref={hostRef} className="score-svg absolute inset-0" />
 
         {/* Bucle seleccionado */}
@@ -820,10 +907,10 @@ export function ScoreCanvas(p: Props) {
 
         {/* Pista de bienvenida */}
         <AnimatePresence>
-          {empty && layout && p.mode === 'notes' && p.annotations.length === 0 && (
+          {empty && layout && p.mode === 'notes' && p.annotations.length === 0 && !bg && (
             <motion.div
               key="hint"
-              className="pointer-events-none absolute left-1/2 grid -translate-x-1/2 place-items-center text-center"
+              className="pointer-events-none absolute left-1/2 z-20 grid -translate-x-1/2 place-items-center gap-3 text-center"
               style={{ top: layout.rows[0].yBottom + 52, width: Math.min(520, layout.width - 40) }}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
@@ -835,6 +922,16 @@ export function ScoreCanvas(p: Props) {
                   ○ redonda · ○| blanca · ●| negra · ●|⟩ corchea · tacha en zig-zag para borrar
                 </div>
               </div>
+              <motion.button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={p.onScan}
+                whileTap={{ scale: 0.94 }}
+                transition={ELASTIC}
+                className="pointer-events-auto flex h-11 items-center gap-2 rounded-full bg-la px-5 text-sm font-extrabold text-[#2b2118] shadow-lg"
+              >
+                <Camera size={18} /> o escanea / importa tu partitura de papel
+              </motion.button>
             </motion.div>
           )}
         </AnimatePresence>
@@ -884,26 +981,27 @@ export function ScoreCanvas(p: Props) {
           ref={annotRef}
           data-testid="annotations"
           className="pointer-events-none absolute left-0 top-0 z-[8]"
-          style={{ width: layout?.width, height: layout?.height }}
+          style={{ width: paperW, height: paperH }}
         />
 
         {/* Tinta + captura de gestos */}
         <canvas
           ref={inkRef}
           className="pointer-events-none absolute left-0 top-0 z-10"
-          style={{ width: layout?.width, height: layout?.height }}
+          style={{ width: paperW, height: paperH }}
         />
         <div
           ref={captureRef}
           data-testid="capture"
           className="absolute inset-0 z-10"
-          style={{ touchAction: 'none', cursor: p.mode === 'annotate' ? 'text' : p.mode === 'erase' ? 'cell' : 'crosshair', WebkitUserSelect: 'none' }}
+          style={{ touchAction: 'none', cursor: p.adjustBg ? 'move' : p.mode === 'annotate' ? 'text' : p.mode === 'erase' ? 'cell' : 'crosshair', WebkitUserSelect: 'none' }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endPointer}
           onPointerCancel={endPointer}
           onContextMenu={(e) => e.preventDefault()}
         />
+      </div>
       </div>
     </div>
   )

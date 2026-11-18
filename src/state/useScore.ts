@@ -1,11 +1,36 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Annotation, Measure, Score } from '../types'
+import type { Annotation, Background, Measure, Score } from '../types'
 import { emptyScore } from './examples'
 import { MEASURE_UNITS, measureUnits } from './music'
 
 const KEY = 'mila:v1'
 const MAX_MEASURES = 64
 const HISTORY_LIMIT = 100
+
+const clampNum = (v: unknown, lo: number, hi: number, dflt: number) =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : dflt
+
+/** Valida el fondo escaneado; sin imagen o con datos rotos se descarta. */
+export function normalizeBackground(raw: unknown): Background | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const b = raw as Partial<Background>
+  if (typeof b.imageId !== 'string' || !b.imageId) return undefined
+  if (!(typeof b.naturalW === 'number' && b.naturalW > 0 && typeof b.naturalH === 'number' && b.naturalH > 0)) return undefined
+  return {
+    imageId: b.imageId,
+    naturalW: b.naturalW,
+    naturalH: b.naturalH,
+    layoutWidth: clampNum(b.layoutWidth, 320, 2400, 900),
+    rowH: clampNum(b.rowH, 90, 320, 160),
+    perRow: Math.round(clampNum(b.perRow, 1, 6, 4)),
+    x: clampNum(b.x, -4000, 4000, 0),
+    y: clampNum(b.y, -4000, 8000, 0),
+    scale: clampNum(b.scale, 0.2, 4, 1),
+    rotation: clampNum(b.rotation, -20, 20, 0),
+    opacity: clampNum(b.opacity, 0.05, 1, 0.6),
+    enhance: b.enhance !== false,
+  }
+}
 
 export function normalizeScore(raw: unknown): Score | null {
   if (!raw || typeof raw !== 'object') return null
@@ -28,7 +53,9 @@ export function normalizeScore(raw: unknown): Score | null {
     [(a as Annotation).ax, (a as Annotation).ay, (a as Annotation).w0].every((v) => typeof v === 'number' && Number.isFinite(v)) &&
     Array.isArray((a as Annotation).strokes)
   const annotations = Array.isArray(s.annotations) ? s.annotations.filter(okAnnot) : []
+  const background = normalizeBackground(s.background)
   return {
+    ...(background ? { background } : {}),
     annotations,
     title: typeof s.title === 'string' ? s.title : 'Sin título',
     bpm: typeof s.bpm === 'number' ? Math.max(30, Math.min(240, Math.round(s.bpm))) : 96,
@@ -63,6 +90,7 @@ function withTrailingMeasure(measures: Measure[]): Measure[] {
 interface Snap {
   measures: Measure[]
   annotations: Annotation[]
+  background?: Background
 }
 
 export interface ScoreApi {
@@ -73,6 +101,8 @@ export interface ScoreApi {
   setMeasures: (fn: (m: Measure[]) => Measure[], record?: boolean) => void
   setAnnotations: (fn: (a: Annotation[]) => Annotation[], record?: boolean) => void
   patch: (p: Partial<Pick<Score, 'bpm' | 'transposition' | 'title'>>) => void
+  /** Fondo escaneado. `record` = guardar en deshacer (poner/quitar sí; mover un deslizador no). */
+  setBackground: (bg: Background | undefined, record?: boolean) => void
   replace: (s: Score) => void
   /** Abre otra partitura (de la galería): empieza con historial de deshacer limpio. */
   open: (s: Score) => void
@@ -92,7 +122,11 @@ export function useScore(): ScoreApi {
   const scoreRef = useRef(score)
   scoreRef.current = score
 
-  const snap = (): Snap => ({ measures: scoreRef.current.measures, annotations: scoreRef.current.annotations ?? [] })
+  const snap = (): Snap => ({
+    measures: scoreRef.current.measures,
+    annotations: scoreRef.current.annotations ?? [],
+    background: scoreRef.current.background,
+  })
   const push = (s: Snap) => {
     undoRef.current.push(s)
     if (undoRef.current.length > HISTORY_LIMIT) undoRef.current.shift()
@@ -131,6 +165,15 @@ export function useScore(): ScoreApi {
     if (record) push(snap())
     scoreRef.current = { ...scoreRef.current, annotations: next }
     setScore((s) => ({ ...s, annotations: next }))
+    force((n) => n + 1)
+  }, [])
+
+  const setBackground = useCallback((bg: Background | undefined, record = false) => {
+    if (record) push(snap())
+    const next = { ...scoreRef.current, background: bg }
+    if (!bg) delete next.background
+    scoreRef.current = next
+    setScore(next)
     force((n) => n + 1)
   }, [])
 
@@ -201,6 +244,7 @@ export function useScore(): ScoreApi {
     setMeasures,
     setAnnotations,
     patch,
+    setBackground,
     replace,
     open,
     undo,
