@@ -8,6 +8,7 @@ import { EXAMPLES } from '../state/examples'
 import { FOLDER_NAME, noteCount, type SavedScore, usedMeasures } from '../state/library'
 import { useImageUrl } from '../state/useImageUrl'
 import { ELASTIC } from './springs'
+import { CloudPanel } from './CloudPanel'
 import { Modal } from './ui'
 
 interface Props {
@@ -237,6 +238,7 @@ export function Gallery(p: Props) {
 
   return (
     <Modal open={p.open} onClose={p.onClose} title="Mis partituras" maxWidth={920}>
+      <CloudPanel />
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <p className="mr-auto text-xs text-muted">
           Se guardan solas en este iPad, con notas, anotaciones, tempo y todo lo demás.

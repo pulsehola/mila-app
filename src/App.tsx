@@ -37,6 +37,7 @@ import { blobToDataUrl, dataUrlToBlob, deleteImage, getImage, imageIdsOf, parseM
 import { newId } from './state/music'
 import { useImageUrl } from './state/useImageUrl'
 import { TOP_PAD } from './notation/renderScore'
+import { onRemoteChange, startCloud } from './cloud/sync'
 
 type Modal = 'tuner' | 'export' | 'help' | 'clear' | 'gallery' | 'scan' | null
 
@@ -60,6 +61,12 @@ export default function App() {
   /** Métrica de la partitura (las antiguas, sin este dato, son 4/4). */
   const meter: Meter = score.meter ?? '4/4'
   const lib = useLibrary(score)
+  // Copia en la nube: sesión guardada + sincronización; lo que llega de otro dispositivo refresca la galería.
+  const refreshLib = lib.refresh
+  useEffect(() => {
+    startCloud()
+    return onRemoteChange(() => void refreshLib())
+  }, [refreshLib])
 
   const [dark, setDark] = useState(() => localStorage.getItem('mila:theme') === 'dark')
   const [selectedId, setSelectedId] = useState<string | null>(null)

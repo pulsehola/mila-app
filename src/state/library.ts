@@ -159,24 +159,36 @@ export function getScore(id: string): Promise<SavedScore | undefined> {
 }
 
 /** Guarda (o actualiza) una partitura conservando su fecha de creación. */
+/** Cambios en la galería (para la copia en la nube). `fromCloud` = vino de otro dispositivo: no se reenvía. */
+export type LibraryChange = { type: 'save'; item: SavedScore } | { type: 'delete'; id: string }
+const changeListeners = new Set<(c: LibraryChange) => void>()
+export function onLibraryChange(fn: (c: LibraryChange) => void): () => void {
+  changeListeners.add(fn)
+  return () => changeListeners.delete(fn)
+}
+const emit = (c: LibraryChange) => changeListeners.forEach((fn) => fn(c))
+
 export async function saveScore(id: string, score: Score): Promise<SavedScore> {
   askPersist()
   const prev = await getScore(id)
   const now = Date.now()
   const item: SavedScore = { id, score, createdAt: prev?.createdAt ?? now, updatedAt: now }
   await run('readwrite', (s) => s.put(item))
+  emit({ type: 'save', item })
   return item
 }
 
-export async function putMany(items: SavedScore[]): Promise<void> {
+export async function putMany(items: SavedScore[], fromCloud = false): Promise<void> {
   askPersist()
   await run('readwrite', (s) => {
     for (const it of items) s.put(it)
   })
+  if (!fromCloud) items.forEach((item) => emit({ type: 'save', item }))
 }
 
-export async function deleteScore(id: string): Promise<void> {
+export async function deleteScore(id: string, fromCloud = false): Promise<void> {
   await run('readwrite', (s) => s.delete(id))
+  if (!fromCloud) emit({ type: 'delete', id })
 }
 
 // ---- Imágenes de fondo (escaneos) -------------------------------------------

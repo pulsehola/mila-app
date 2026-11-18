@@ -89,6 +89,9 @@ self.addEventListener('fetch', (e) => {
 // navigator.share en contextos seguros. basicSsl genera un certificado local.
 export default defineConfig({
   plugins: [react(), tailwindcss(), basicSsl(), offlineServiceWorker()],
+  // La integración Supabase ↔ Vercel crea NEXT_PUBLIC_SUPABASE_URL y la clave pública (anon/publishable):
+  // se exponen tal cual al cliente. Las claves secretas (SUPABASE_SERVICE_ROLE_KEY, etc.) nunca entran.
+  envPrefix: ['VITE_', 'NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY'],
   server: { host: true },
   test: { environment: 'node', include: ['src/**/*.test.ts'] },
 })
