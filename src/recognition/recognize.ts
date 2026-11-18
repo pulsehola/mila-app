@@ -241,13 +241,19 @@ export function recognizeCluster(strokes: Stroke[], staff: StaffCtx): Recognized
     const stemTop = { x: stem.box.cx, y: stem.box.y0 }
     const stemBottom = { x: stem.box.cx, y: stem.box.y1 }
     const free = dist(stemTop, { x: merged.cx, y: merged.cy }) > dist(stemBottom, { x: merged.cx, y: merged.cy }) ? stemTop : stemBottom
-    const flag = others.find(
-      (f) => f !== stem && !isHeadLike(f) && dist({ x: f.box.cx, y: f.box.cy }, free) <= 20 && f.box.w >= 4,
+    const flags = others.filter(
+      (f) =>
+        f !== stem &&
+        !isHeadLike(f) &&
+        f.box.w >= 4 &&
+        (dist({ x: f.box.cx, y: f.box.cy }, free) <= 24 || (f.box.h >= 3 && boxesNear(f.box, stem.box, 8))),
     )
-    const flagAlt = others.find(
-      (f) => f !== stem && isHeadLike(f) === false && f.box.h >= 3 && boxesNear(f.box, stem.box, 8),
-    )
-    if (isFilled && (flag || flagAlt)) {
+    // Dos corchetes (o uno solo con dos "olas" seguidas) = semicorchea.
+    const doubleInOne = flags.length === 1 && reversals(flags[0].s, 'x', 3) >= 3 && flags[0].box.h >= 12
+    if (isFilled && (flags.length >= 2 || doubleInOne)) {
+      return { kind: 'note', dur: '16', ...base, reason: 'cabeza rellena + plica + 2 corchetes (semicorchea)' }
+    }
+    if (isFilled && flags.length === 1) {
       return { kind: 'note', dur: '8', ...base, reason: 'cabeza rellena + plica + corchete (corchea)' }
     }
     return isFilled

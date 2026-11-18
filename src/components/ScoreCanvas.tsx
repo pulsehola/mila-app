@@ -3,13 +3,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { Annotation, Background, EditMode, LoopRange, Measure, Note, Pt, Stroke, Transposition } from '../types'
 import { engine } from '../audio/engine'
 import { bbox } from '../recognition/geometry'
-import {
-  clusterStrokes,
-  isScratchOut,
-  recognizeCluster,
-  splitByHeads,
-  STAFF_GAP,
-} from '../recognition/recognize'
+import { clusterStrokes, isScratchOut, splitByHeads, STAFF_GAP } from '../recognition/recognize'
+import { recognizePersonal } from '../recognition/personal'
 import {
   clampStep,
   describeDiff,
@@ -33,6 +28,7 @@ import {
   shouldJoin,
 } from '../notation/annotations'
 import { drawStroke } from './ink'
+import { usePenSurface } from '../input/pen'
 import { ELASTIC } from './springs'
 import { Camera, Check } from 'lucide-react'
 
@@ -358,7 +354,7 @@ export function ScoreCanvas(p: Props) {
         continue
       }
       const staff = l.rows[row]
-      const rec = recognizeCluster(group, staff)
+      const rec = recognizePersonal(group, staff)
       if (rec.kind === 'barline') continue
       if (rec.kind === 'accidental') {
         looseAcc.push({ acc: rec.acc, x: rec.x, row })
@@ -532,6 +528,20 @@ export function ScoreCanvas(p: Props) {
   /** Punto que debe quedarse bajo los dedos/cursor al hacer zoom (fracción del contenido + posición en pantalla). */
   const zoomAnchor = useRef<{ fx: number; fy: number; vx: number; vy: number } | null>(null)
 
+  // Safari/iPadOS: sin esto, el sistema puede "robar" el trazo del Pencil a mitad (scroll, lupa, selección)
+  // y dispara pointercancel: el trazo se cortaba al deslizar o al levantar el lápiz.
+  const allowFinger = useCallback(() => propsRef.current.fingerDraw, [])
+  usePenSurface(captureRef, allowFinger)
+
+  /** Captura de puntero tolerante: si el puntero ya no existe, Safari lanza y no debe romper el trazo. */
+  const capture = (id: number) => {
+    try {
+      captureRef.current!.setPointerCapture(id)
+    } catch {
+      /* noop */
+    }
+  }
+
   /** Zoom alrededor de un punto de la pantalla (los dedos o el cursor), sin que la hoja "salte". */
   const zoomAround = useCallback((nextZoom: number, clientX: number, clientY: number) => {
     const el = scrollRef.current
@@ -608,7 +618,7 @@ export function ScoreCanvas(p: Props) {
       // Con el dedo o el lápiz: arrastrar desplaza la partitura escaneada.
       if (bgDrag.current) return
       e.preventDefault()
-      captureRef.current!.setPointerCapture(e.pointerId)
+      capture(e.pointerId)
       bgDrag.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, x: cur.background.x, y: cur.background.y, recorded: false }
       return
     }
@@ -633,14 +643,22 @@ export function ScoreCanvas(p: Props) {
       return
     }
     if (type === 'mouse' && e.button !== 0) return
-    if (activeRef.current) return
+    const prev = activeRef.current
+    if (prev) {
+      // Un trazo que nunca recibió pointerup (Safari a veces lo pierde) no puede bloquear los siguientes:
+      // se cierra con lo que tenga. Un dedo mientras el lápiz escribe se ignora.
+      if (prev.pointerId === e.pointerId || type === 'pen' || !prev.pen) {
+        activeRef.current = null
+        finishStroke(prev)
+      } else return
+    }
 
     e.preventDefault()
-    captureRef.current!.setPointerCapture(e.pointerId)
+    capture(e.pointerId)
     const { x, y } = local(e)
     const target = cur.mode === 'notes' ? findTarget(x, y) : null
     const pen = type === 'pen'
-    const first: Pt = { x, y, p: pen ? e.pressure || 0.5 : 0.5, t: performance.now() }
+    const first: Pt = { x, y, p: pen && e.pressure > 0 ? e.pressure : 0.5, t: performance.now() }
     const n = target && target.kind === 'note' ? cur.measures[target.measure]?.[target.index] : undefined
     activeRef.current = {
       pointerId: e.pointerId,
@@ -782,11 +800,26 @@ export function ScoreCanvas(p: Props) {
 
     const a = activeRef.current
     if (!a || a.pointerId !== e.pointerId) return
-    const events = (e.nativeEvent.getCoalescedEvents?.() ?? []) as PointerEvent[]
-    const list = events.length ? events : [e.nativeEvent]
+    e.preventDefault()
+    addPoints(a, e.nativeEvent)
+    if (a.mode !== 'drag') scheduleRedraw()
+  }
+
+  /** Añade al trazo todos los puntos del evento (los "coalesced" del Pencil a 240 Hz incluidos). */
+  const addPoints = (a: Active, native: PointerEvent) => {
+    let list: PointerEvent[] = []
+    try {
+      list = (native.getCoalescedEvents?.() ?? []) as PointerEvent[]
+    } catch {
+      list = []
+    }
+    if (!list.length) list = [native]
     for (const ev of list) {
       const { x, y } = local(ev)
-      a.pts.push({ x, y, p: a.pen ? ev.pressure || 0.5 : 0.5, t: performance.now() })
+      const last = a.pts[a.pts.length - 1]
+      if (last && last.x === x && last.y === y) continue
+      // En pointerup la presión llega a 0: valor neutro para no afinar el final del trazo.
+      a.pts.push({ x, y, p: a.pen && ev.pressure > 0 ? ev.pressure : 0.5, t: performance.now() })
       if (a.mode === 'undecided') {
         const dx = x - a.startX
         const dy = y - a.startY
@@ -803,7 +836,6 @@ export function ScoreCanvas(p: Props) {
       if (a.mode === 'drag') applyDrag(a, y)
       else if (propsRef.current.mode === 'erase') eraseAt(a, x, y)
     }
-    if (a.mode !== 'drag') scheduleRedraw()
   }
 
   const finishStroke = (a: Active) => {
@@ -884,11 +916,24 @@ export function ScoreCanvas(p: Props) {
     const a = activeRef.current
     if (!a || a.pointerId !== e.pointerId) return
     activeRef.current = null
-    if (e.type !== 'pointercancel') finishStroke(a)
-    else {
+    // El último tramo (entre el último pointermove y el pointerup) también cuenta.
+    if (e.type === 'pointerup') addPoints(a, e.nativeEvent)
+    // pointercancel: iPadOS puede cancelar a mitad de trazo. Lo dibujado se conserva en vez de perderse;
+    // solo un toque sin mover sobre una nota (aún sin decidir) se descarta.
+    if (e.type === 'pointercancel' && a.mode === 'undecided') {
       if (a.erased.size) cancelErase(a)
       redrawInk()
+      return
     }
+    finishStroke(a)
+  }
+
+  /** Si el navegador suelta la captura sin pointerup, el trazo se cierra igualmente. */
+  const onLostCapture = (e: React.PointerEvent) => {
+    const a = activeRef.current
+    if (!a || a.pointerId !== e.pointerId) return
+    activeRef.current = null
+    finishStroke(a)
   }
 
   // ---- Auto-scroll del cursor --------------------------------------------
@@ -1172,11 +1217,12 @@ export function ScoreCanvas(p: Props) {
           ref={captureRef}
           data-testid="capture"
           className="absolute inset-0 z-10"
-          style={{ touchAction: 'none', cursor: p.adjustBg ? 'move' : p.mode === 'annotate' ? 'text' : p.mode === 'erase' ? 'cell' : 'crosshair', WebkitUserSelect: 'none' }}
+          style={{ touchAction: 'none', cursor: p.adjustBg ? 'move' : p.mode === 'annotate' ? 'text' : p.mode === 'erase' ? 'cell' : 'crosshair', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endPointer}
           onPointerCancel={endPointer}
+          onLostPointerCapture={onLostCapture}
           onContextMenu={(e) => e.preventDefault()}
         />
       </div>

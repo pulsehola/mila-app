@@ -7,7 +7,7 @@ import { LETTERS, makeNote, makeRest } from './music'
  *   f#4/8  Fa#4 corchea         bb4/q Sib4 negra
  *   sufijos: .  staccato   >  acento   ~  ligadura a la siguiente nota
  */
-const TOKEN = /^(?:(r)|([a-g])([#bn])?(\d))\/(w|h|q|8)([.>~]*)$/
+const TOKEN = /^(?:(r)|([a-g])([#bn])?(\d))\/(w|h|q|16|8)([.>~]*)$/
 
 export function parseMeasure(src: string): Measure {
   return src

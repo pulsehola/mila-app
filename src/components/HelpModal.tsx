@@ -59,7 +59,7 @@ const ITEMS: { name: string; how: string; glyph: ReactNode }[] = [
   },
 ]
 
-export function HelpModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onClose: () => void; onRecalibrate: () => void }) {
   return (
     <Modal open={open} onClose={onClose} title="Guía de trazos" maxWidth={680}>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -73,6 +73,13 @@ export function HelpModal({ open, onClose }: { open: boolean; onClose: () => voi
           </div>
         ))}
       </div>
+      <button
+        type="button"
+        onClick={onRecalibrate}
+        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-mint px-4 text-sm font-black text-[#12352c] shadow"
+      >
+        ✍️ Repetir el test de escritura (Mila aprende tu letra)
+      </button>
       <div className="mt-4 rounded-2xl bg-sun/25 p-3 text-sm">
         <p className="font-bold">Consejos</p>
         <ul className="mt-1 list-disc space-y-1 pl-5 text-[13px]">

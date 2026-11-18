@@ -7,19 +7,21 @@ interface Props {
   size?: number
   /** Cuando suena la música las ondas aceleran. */
   playing?: boolean
+  className?: string
 }
 
 /**
  * Isotipo MI-LA: dos corcheas unidas sobre un pentagrama. La de abajo es un MI (primera línea, verde menta)
  * y la de arriba un LA (segundo espacio, latón). Las ondas respiran y aceleran al reproducir.
  */
-export function Logo({ size = 40, playing = false }: Props) {
+export function Logo({ size = 40, playing = false, className }: Props) {
   const speed = playing ? 0.9 : 2.4
   const spring = { type: 'spring' as const, stiffness: 520, damping: 13 }
   return (
     <motion.svg
       width={size}
       height={size}
+      className={className}
       viewBox="0 0 64 64"
       role="img"
       aria-label="MILA"

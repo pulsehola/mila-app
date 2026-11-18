@@ -28,14 +28,20 @@ interface Props {
 export function TopBar(p: Props) {
   return (
     <header
-      className="relative z-30 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-panel/90 px-4 py-2 backdrop-blur"
-      style={{ paddingTop: 'max(8px, env(safe-area-inset-top))' }}
+      className="relative z-30 flex min-h-[60px] flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-panel/90 py-2 backdrop-blur"
+      style={{
+        paddingTop: 'max(8px, env(safe-area-inset-top))',
+        paddingLeft: 'max(16px, env(safe-area-inset-left))',
+        paddingRight: 'max(16px, env(safe-area-inset-right))',
+      }}
     >
-      <div className="flex items-center gap-2">
-        <Logo size={44} playing={p.playing} />
-        <div className="leading-none">
-          <Wordmark className="text-[22px]" />
-          <div className="text-[10px] font-bold uppercase tracking-widest text-muted">partituras a mano</div>
+      {/* Logo: mismo alto (44 px) que el resto de controles y centrado con ellos. El SVG va como "block"
+          para que no herede el hueco de línea base de un elemento inline. */}
+      <div className="flex h-11 shrink-0 items-center gap-2.5">
+        <Logo size={40} playing={p.playing} className="block shrink-0" />
+        <div className="flex flex-col justify-center gap-[3px]">
+          <Wordmark className="text-[22px] leading-none" />
+          <div className="text-[10px] font-bold uppercase leading-none tracking-widest text-muted">partituras a mano</div>
         </div>
       </div>
 
@@ -43,11 +49,11 @@ export function TopBar(p: Props) {
         aria-label="Título de la partitura"
         value={p.title}
         onChange={(e) => p.onTitle(e.target.value)}
-        className="min-w-0 max-w-[220px] flex-1 rounded-2xl border border-transparent bg-transparent px-3 py-2 text-base font-bold focus:border-line focus:bg-paper focus:outline-none"
+        className="h-11 min-w-[110px] max-w-[220px] flex-1 rounded-2xl border border-transparent bg-transparent px-3 text-base font-bold leading-none focus:border-line focus:bg-paper focus:outline-none"
         style={{ fontSize: 16 }}
       />
 
-      <div className="relative ml-auto flex rounded-2xl border border-line bg-paper p-1" role="group" aria-label="Transposición">
+      <div className="relative ml-auto flex h-11 items-center rounded-2xl border border-line bg-paper p-1" role="group" aria-label="Transposición">
         {(
           [
             ['Bb', 'Trompeta Sib'],
@@ -61,7 +67,7 @@ export function TopBar(p: Props) {
               type="button"
               aria-pressed={on}
               onClick={() => p.onTransposition(key)}
-              className="relative h-11 rounded-xl px-3 text-sm font-extrabold"
+              className="relative h-full rounded-xl px-3 text-sm font-extrabold"
               style={{ color: on ? '#2b2118' : 'var(--muted)' }}
             >
               {on && (

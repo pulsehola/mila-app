@@ -5,12 +5,13 @@ export const MEASURE_UNITS = 16
 export const MIN_STEP = -4 // La3
 export const MAX_STEP = 15 // Re6
 
-export const DUR_UNITS: Record<Duration, number> = { w: 16, h: 8, q: 4, '8': 2 }
+export const DUR_UNITS: Record<Duration, number> = { w: 16, h: 8, q: 4, '8': 2, '16': 1 }
 export const DUR_LABEL: Record<Duration, string> = {
   w: 'Redonda',
   h: 'Blanca',
   q: 'Negra',
   '8': 'Corchea',
+  '16': 'Semicorchea',
 }
 
 export const LETTERS = ['c', 'd', 'e', 'f', 'g', 'a', 'b'] as const

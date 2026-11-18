@@ -3,6 +3,8 @@ import { Hourglass, ImageIcon, Minus, MousePointerClick, Plus, Trash2, ZoomIn, Z
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createTapTempo, engine } from './audio/engine'
 import { ArticulationPalette } from './components/ArticulationPalette'
+import { Calibration } from './components/Calibration'
+import { isCalibrated } from './recognition/profile'
 import { ExportModal } from './components/ExportModal'
 import { HelpModal } from './components/HelpModal'
 import { ModeSwitch } from './components/ModeSwitch'
@@ -88,6 +90,8 @@ export default function App() {
   const [scanBusy, setScanBusy] = useState(false)
   const bgUrl = useImageUrl(score.background?.imageId)
   const [mode, setModeState] = useState<EditMode>('notes')
+  // Test de escritura: obligatorio la primera vez (Mila aprende tu letra); luego se repite desde la guía.
+  const [calib, setCalib] = useState<'required' | 'optional' | null>(() => (isCalibrated() ? null : 'required'))
   const [toast, setToast] = useState<{ msg: string; tone: 'info' | 'warn' } | null>(null)
   const transportRef = useRef<TransportHandle>(null)
   const toastTimer = useRef(0)
@@ -816,7 +820,27 @@ export default function App() {
 
       <Tuner open={modal === 'tuner'} onClose={() => setModal(null)} transposition={score.transposition} />
       <ExportModal open={modal === 'export'} onClose={() => setModal(null)} score={score} onToast={showToast} />
-      <HelpModal open={modal === 'help'} onClose={() => setModal(null)} />
+      <HelpModal
+        open={modal === 'help'}
+        onClose={() => setModal(null)}
+        onRecalibrate={() => {
+          setModal(null)
+          setCalib('optional')
+        }}
+      />
+      <AnimatePresence>
+        {calib && (
+          <Calibration
+            key="calib"
+            required={calib === 'required'}
+            onClose={() => setCalib(null)}
+            onDone={() => {
+              setCalib(null)
+              showToast('Test completado: Mila ya reconoce tu letra')
+            }}
+          />
+        )}
+      </AnimatePresence>
       <ScanSheet open={modal === 'scan'} busy={scanBusy} onClose={() => setModal(null)} onFile={(f, convert) => void handleScanFile(f, convert)} />
       <Gallery
         open={modal === 'gallery'}

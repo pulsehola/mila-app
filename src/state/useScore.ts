@@ -45,7 +45,7 @@ export function normalizeScore(raw: unknown): Score | null {
     !!n &&
     typeof n === 'object' &&
     typeof (n as { id?: unknown }).id === 'string' &&
-    ['w', 'h', 'q', '8'].includes((n as { dur: string }).dur) &&
+    ['w', 'h', 'q', '8', '16'].includes((n as { dur: string }).dur) &&
     ['note', 'rest'].includes((n as { kind: string }).kind)
   const measures = s.measures.slice(0, MAX_MEASURES).map((m) => (Array.isArray(m) ? m.filter(okNote) : []))
   const okAnnot = (a: unknown): a is Annotation =>

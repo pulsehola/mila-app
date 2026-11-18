@@ -1,7 +1,7 @@
 import type { Score } from '../types'
 import { DUR_UNITS, effectiveAccidental, letterOf, octaveOf } from '../state/music'
 
-const TYPE: Record<string, string> = { w: 'whole', h: 'half', q: 'quarter', '8': 'eighth' }
+const TYPE: Record<string, string> = { w: 'whole', h: 'half', q: 'quarter', '8': 'eighth', '16': '16th' }
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 

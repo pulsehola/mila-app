@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { detectPitch, noteLabel, readingFromFreq } from './pitch'
-import { buildEvents, midiToFreq, writtenMidi, soundingMidi } from '../state/music'
+import { buildEvents, DUR_UNITS, midiToFreq, writtenMidi, soundingMidi } from '../state/music'
 import { parseMeasure, EXAMPLES } from '../state/examples'
 
 function sine(freq: number, sr = 44100, n = 4096, harmonics = 1): Float32Array {
@@ -56,7 +56,7 @@ describe('ejemplos', () => {
     for (const ex of EXAMPLES) {
       const s = ex.build()
       for (const [i, m] of s.measures.entries()) {
-        const units = m.reduce((a, n) => a + ({ w: 16, h: 8, q: 4, '8': 2 } as const)[n.dur], 0)
+        const units = m.reduce((a, n) => a + DUR_UNITS[n.dur], 0)
         expect(units, `${ex.name} compás ${i + 1}`).toBe(16)
       }
     }

@@ -1,5 +1,5 @@
-/** Duraciones soportadas: redonda, blanca, negra, corchea. */
-export type Duration = 'w' | 'h' | 'q' | '8'
+/** Duraciones soportadas: redonda, blanca, negra, corchea, semicorchea. */
+export type Duration = 'w' | 'h' | 'q' | '8' | '16'
 export type Accidental = '' | '#' | 'b' | 'n'
 export type Transposition = 'Bb' | 'C'
 
