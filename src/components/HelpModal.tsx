@@ -181,6 +181,12 @@ export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onC
             <b> a altura real</b> (como suena la trompeta en Sib). Siempre crea una copia: tu partitura no cambia.
           </li>
           <li>
+            <b>Práctica</b> (birrete, en la barra de abajo): velocidad del 40 al 100 % sin que cambie la afinación;
+            bucle A–B (A y B toman el compás que suena o el de la nota seleccionada) o <b>Repetir este compás</b>; y
+            escuchar por separado la <b>melodía</b> y el <b>acompañamiento</b> (acordes automáticos según la melodía y la
+            armadura, en altura real). La barra naranja sigue la música tal como se oye.
+          </li>
+          <li>
             <b>Subdivisión del metrónomo</b> (botón junto al metrónomo): pulsos, corcheas, tresillos o semicorcheas, con un clic
             más suave entre pulso y pulso.
           </li>

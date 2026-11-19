@@ -1,5 +1,5 @@
 import { motion, useAnimationControls } from 'framer-motion'
-import { Metronome as MetronomeIcon, Minus, Pause, Play, Plus, Repeat, Square } from 'lucide-react'
+import { GraduationCap, Metronome as MetronomeIcon, Minus, Pause, Play, Plus, Repeat, Square } from 'lucide-react'
 import { forwardRef, useImperativeHandle } from 'react'
 import { IconButton } from './ui'
 import { ELASTIC } from './springs'
@@ -26,6 +26,10 @@ interface Props {
   subdivision: 1 | 2 | 3 | 4
   onSubdivision: () => void
   onLoop: () => void
+  /** Panel de práctica abierto, y velocidad actual ("75 %"). */
+  practice: boolean
+  speedLabel: string
+  onPractice: () => void
 }
 
 /** Barra inferior para el atril: Play con latido sincronizado, BPM + Tap Tempo, metrónomo y bucle. */
@@ -125,6 +129,12 @@ export const TransportBar = forwardRef<TransportHandle, Props>(function Transpor
             <Repeat size={24} />
           </IconButton>
           <span className="mt-0.5 text-[10px] font-bold text-muted">{p.loopLabel}</span>
+        </div>
+        <div className="flex flex-col items-center">
+          <IconButton label="Práctica: velocidad, bucle A–B, melodía y acompañamiento" active={p.practice} onClick={p.onPractice} tone="coral" size={52}>
+            <GraduationCap size={24} />
+          </IconButton>
+          <span className="mt-0.5 text-[10px] font-bold text-muted">{p.speedLabel === '100 %' ? 'práctica' : p.speedLabel}</span>
         </div>
       </div>
     </div>

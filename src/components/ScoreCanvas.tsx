@@ -23,6 +23,8 @@ import {
   writtenMidi,
 } from '../state/music'
 import { type Layout, noteElement, renderScore } from '../notation/renderScore'
+import { playheadAt } from '../notation/playhead'
+import { measureTimeline } from '../state/practice'
 import {
   annotationsHit,
   appendStroke,
@@ -55,6 +57,9 @@ interface Props {
   transposition: Transposition
   selectedId: string | null
   cursorId: string | null
+  /** Suena la partitura y qué fragmento (para el cursor continuo). */
+  playing: boolean
+  playRange: LoopRange | null
   loopMode: boolean
   loopRange: LoopRange | null
   fingerDraw: boolean
@@ -1145,7 +1150,43 @@ export function ScoreCanvas(p: Props) {
     () => (p.cursorId && layout ? layout.notes.find((n) => n.id === p.cursorId) ?? null : null),
     [p.cursorId, layout],
   )
-  const cursorRow = cursorHit && layout ? layout.measures.find((m) => m.index === cursorHit.measure)?.row ?? 0 : -1
+  // Cursor continuo: en cada fotograma se lee del motor de audio qué se está oyendo y se coloca la barra.
+  // Se mueve el DOM directamente (sin re-render de React) para que vaya fluido y pegado al sonido.
+  const playheadRef = useRef<HTMLDivElement>(null)
+  const [playRow, setPlayRow] = useState(-1)
+  const timeline = useMemo(() => (p.playing ? measureTimeline(p.measures, p.playRange, p.meter) : null), [p.playing, p.measures, p.playRange, p.meter])
+  useEffect(() => {
+    const el = playheadRef.current
+    if (!p.playing || !timeline || !layout || !el) {
+      setPlayRow(-1)
+      return
+    }
+    let raf = 0
+    let row = -1
+    const frame = () => {
+      raf = requestAnimationFrame(frame)
+      const u = engine.positionUnits
+      const pos = u === null ? null : playheadAt(timeline, layout, u)
+      if (!pos) {
+        el.style.opacity = '0'
+        return
+      }
+      const r = layout.rows[pos.row]
+      el.style.opacity = '1'
+      el.style.transform = `translate(${pos.x - 3}px, ${r.yTop - 36}px)`
+      el.style.height = `${r.yBottom - r.yTop + 72}px`
+      if (pos.row !== row) {
+        row = pos.row
+        setPlayRow(row)
+      }
+    }
+    raf = requestAnimationFrame(frame)
+    return () => {
+      cancelAnimationFrame(raf)
+      el.style.opacity = '0'
+    }
+  }, [p.playing, timeline, layout])
+  const cursorRow = playRow >= 0 ? playRow : cursorHit && layout ? layout.measures.find((m) => m.index === cursorHit.measure)?.row ?? 0 : -1
   useEffect(() => {
     if (cursorRow < 0 || !layout || !scrollRef.current) return
     const r = layout.rows[cursorRow]
@@ -1284,32 +1325,22 @@ export function ScoreCanvas(p: Props) {
           )}
         </AnimatePresence>
 
-        {/* Cursor de reproducción */}
-        <AnimatePresence>
-          {cursorHit && layout && (
-            <motion.div
-              key="cursor"
-              data-testid="cursor"
-              className="pointer-events-none absolute rounded-full"
-              style={{
-                width: 6,
-                left: 0,
-                top: 0,
-                background: 'linear-gradient(var(--coral), var(--sun))',
-                boxShadow: '0 0 18px 4px color-mix(in srgb, var(--sun) 55%, transparent)',
-              }}
-              initial={{ opacity: 0 }}
-              animate={{
-                opacity: 1,
-                x: cursorHit.x - 3,
-                y: layout.rows[cursorRow].yTop - 36,
-                height: layout.rows[cursorRow].yBottom - layout.rows[cursorRow].yTop + 72,
-              }}
-              exit={{ opacity: 0 }}
-              transition={{ type: 'spring', stiffness: 260, damping: 26 }}
-            />
-          )}
-        </AnimatePresence>
+        {/* Cursor de reproducción: continuo y sincronizado con lo que se oye (ver playheadRef). */}
+        <div
+          ref={playheadRef}
+          data-testid="cursor"
+          aria-hidden
+          className="pointer-events-none absolute rounded-full"
+          style={{
+            width: 6,
+            left: 0,
+            top: 0,
+            opacity: 0,
+            willChange: 'transform',
+            background: 'linear-gradient(var(--coral), var(--sun))',
+            boxShadow: '0 0 18px 4px color-mix(in srgb, var(--sun) 55%, transparent)',
+          }}
+        />
 
         {/* Pista de bienvenida */}
         <AnimatePresence>

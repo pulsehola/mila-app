@@ -1,5 +1,6 @@
 import * as Tone from 'tone'
 import { DEFAULT_METER, meterParts, midiToFreq, type PlayEvent } from '../state/music'
+import { clampSpeed, practiceBpm, type AccompEvent } from '../state/practice'
 import type { Meter, Sound } from '../types'
 
 const PPQ = 192 // ticks por negra en Tone.Transport
@@ -12,8 +13,16 @@ export interface PlayOptions {
   events: PlayEvent[]
   totalUnits: number
   loop: boolean
-  /** Compás (relativo al inicio de los eventos) en el que arrancan los eventos; usado para cursor/bucle. */
+  /** Tempo escrito en la partitura (♩ = bpm). La velocidad de práctica se aplica aparte. */
   bpm: number
+  /** Acompañamiento automático (alturas de concierto). */
+  accompaniment?: AccompEvent[]
+}
+
+/** Qué se oye: la melodía (lo escrito) y el acompañamiento, cada uno se puede silenciar. */
+export interface Mix {
+  melody: boolean
+  accomp: boolean
 }
 
 type Listener<T> = ((v: T) => void) | null
@@ -31,6 +40,17 @@ export class AudioEngine {
   private click!: Tone.MembraneSynth
   private vibrato!: Tone.LFO
   private reverb!: Tone.Reverb
+  /** Canales: melodía y acompañamiento, con su propio volumen y silencio. */
+  private melodyBus!: Tone.Volume
+  private accompBus!: Tone.Volume
+  private accompPiano!: Tone.PolySynth<Tone.FMSynth>
+  private limiter!: Tone.Limiter
+  private mix: Mix = { melody: true, accomp: false }
+  /** Tempo escrito y velocidad de práctica (0,4–1). El tono de cada nota no depende de ninguno de los dos. */
+  private baseBpm = 90
+  private speed = 1
+  /** Momento (tiempo del AudioContext) en que empezó a sonar la partitura actual. */
+  private startAt = Infinity
   private metronomeOn = false
   private scoreActive = false
   private beatCounter = 0
@@ -59,7 +79,10 @@ export class AudioEngine {
     this.reverb = new Tone.Reverb({ decay: 1.6, wet: 0.16 })
     await this.reverb.ready
     const limiter = new Tone.Limiter(-3).toDestination()
+    this.limiter = limiter
     this.reverb.connect(limiter)
+    this.melodyBus = new Tone.Volume(0).connect(this.reverb)
+    this.accompBus = new Tone.Volume(0).connect(this.reverb)
 
     this.synth = new Tone.MonoSynth({
       oscillator: { type: 'sawtooth' },
@@ -74,7 +97,7 @@ export class AudioEngine {
         octaves: 3.2,
       },
       volume: -8,
-    }).connect(this.reverb)
+    }).connect(this.melodyBus)
 
     // Vibrato muy sutil, característico de una nota sostenida de trompeta.
     this.piano = new Tone.PolySynth(Tone.FMSynth, {
@@ -85,7 +108,21 @@ export class AudioEngine {
       modulation: { type: 'sine' },
       modulationEnvelope: { attack: 0.002, decay: 0.5, sustain: 0.1, release: 0.6 },
       volume: -9,
-    }).connect(this.reverb)
+    }).connect(this.melodyBus)
+
+    // Piano del acompañamiento: más suave y sin brillo, para que la melodía quede delante.
+    this.accompPiano = new Tone.PolySynth(Tone.FMSynth, {
+      harmonicity: 2,
+      modulationIndex: 3,
+      oscillator: { type: 'sine' },
+      envelope: { attack: 0.006, decay: 1.1, sustain: 0.12, release: 0.7 },
+      modulation: { type: 'sine' },
+      modulationEnvelope: { attack: 0.002, decay: 0.4, sustain: 0.08, release: 0.5 },
+    }).connect(this.accompBus)
+    this.accompPiano.maxPolyphony = 16
+    // El volumen va en el PolySynth (en las opciones de voz no se aplica).
+    this.accompPiano.volume.value = 1
+    this.applyMix()
 
     this.vibrato = new Tone.LFO({ frequency: 5.2, min: -6, max: 6 }).start()
     this.vibrato.connect(this.synth.detune)
@@ -119,9 +156,68 @@ export class AudioEngine {
     else this.synth.triggerAttackRelease(freq, dur, time, vel)
   }
 
+  /** Tempo escrito. Lo que suena es tempo × velocidad de práctica. */
   setBpm(bpm: number): void {
+    this.baseBpm = bpm
+    this.applyTempo()
+  }
+
+  /**
+   * Velocidad de práctica (40 %–100 %). Solo cambia CUÁNDO empieza y cuánto dura cada nota: la frecuencia de
+   * cada nota se calcula de su altura (midiToFreq), así que la afinación no cambia al ir más lento.
+   */
+  setSpeed(speed: number): void {
+    this.speed = clampSpeed(speed)
+    this.applyTempo()
+  }
+
+  get currentSpeed(): number {
+    return this.speed
+  }
+
+  private applyTempo(): void {
     if (!this.ready) return
-    Tone.getTransport().bpm.rampTo(bpm, 0.05)
+    Tone.getTransport().bpm.rampTo(practiceBpm(this.baseBpm, this.speed), 0.05)
+  }
+
+  setMix(mix: Mix): void {
+    this.mix = { ...mix }
+    this.applyMix()
+  }
+
+  private applyMix(): void {
+    if (!this.ready) return
+    this.melodyBus.mute = !this.mix.melody
+    this.accompBus.mute = !this.mix.accomp
+  }
+
+  /**
+   * Posición de lo que SE OYE ahora mismo, en semicorcheas desde el inicio de lo que suena. Tone programa por
+   * delante (lookAhead) y el altavoz añade latencia: se resta para que el cursor vaya con el audio, no antes.
+   */
+  get positionUnits(): number | null {
+    if (!this.ready || !this.scoreActive) return null
+    const ctx = Tone.getContext()
+    const raw = ctx.rawContext as AudioContext
+    const latency = (raw.outputLatency || 0) + (raw.baseLatency || 0)
+    const tr = Tone.getTransport()
+    const heard = ctx.currentTime - latency
+    // Antes de que empiece a sonar, el Transport aún recuerda la reproducción anterior: no hay posición.
+    if (heard < this.startAt) return null
+    const ticks = tr.getTicksAtTime(heard)
+    if (!(ticks >= 0)) return 0
+    let u = ticks / TICKS_PER_UNIT
+    if (tr.loop) {
+      const ls = Tone.Time(tr.loopStart).toTicks() / TICKS_PER_UNIT
+      const le = Tone.Time(tr.loopEnd).toTicks() / TICKS_PER_UNIT
+      if (le > ls && u >= le) u = ls + ((u - ls) % (le - ls))
+    }
+    return u
+  }
+
+  /** Salida final (para grabar y medir el audio real en las pruebas). */
+  get output(): Tone.ToneAudioNode | null {
+    return this.ready ? this.limiter : null
   }
 
   /** Métrica para el metrónomo: en x/4 marca negras; en 6/8, corcheas (acento en 1 y en 4). */
@@ -175,7 +271,8 @@ export class AudioEngine {
     await this.init()
     this.stop(false)
     const tr = Tone.getTransport()
-    tr.bpm.value = bpm
+    this.baseBpm = bpm
+    tr.bpm.value = practiceBpm(bpm, this.speed)
     this.beatCounter = 0
     this.scheduleClicks(tr)
     tr.start('+0.05')
@@ -185,7 +282,8 @@ export class AudioEngine {
     await this.init()
     this.stop(false)
     const tr = Tone.getTransport()
-    tr.bpm.value = opts.bpm
+    this.baseBpm = opts.bpm
+    tr.bpm.value = practiceBpm(opts.bpm, this.speed)
     tr.position = 0
     this.beatCounter = 0
     this.scoreActive = true
@@ -205,6 +303,16 @@ export class AudioEngine {
       }, `${ticks}i`)
     }
 
+    for (const ev of opts.accompaniment ?? []) {
+      tr.schedule((time) => {
+        const secPerUnit = 60 / bpmNow() / 4
+        const dur = Math.max(0.12, ev.durUnits * secPerUnit * 0.9)
+        const vel = ev.midis.length === 1 ? 0.75 : 0.5
+        // Ojo: no pasar midiToFreq directo a map (el índice entraría como «La4 = 0 Hz»).
+        this.accompPiano.triggerAttackRelease(ev.midis.map((m) => midiToFreq(m)), dur, time, vel)
+      }, `${ev.startUnits * TICKS_PER_UNIT}i`)
+    }
+
     this.scheduleClicks(tr)
 
     const endTicks = opts.totalUnits * TICKS_PER_UNIT
@@ -220,7 +328,8 @@ export class AudioEngine {
         }, time + 0.15)
       }, `${endTicks}i`)
     }
-    tr.start('+0.06')
+    this.startAt = Tone.now() + 0.06
+    tr.start(this.startAt)
   }
 
   private tickBeat(time: number): void {
@@ -246,6 +355,7 @@ export class AudioEngine {
     tr.loop = false
     this.synth.triggerRelease()
     this.piano?.releaseAll()
+    this.accompPiano?.releaseAll()
     this.scoreActive = false
     this.onCursor?.(null)
     if (notify && wasActive) this.onStop?.()
@@ -260,6 +370,9 @@ export class AudioEngine {
     this.stop(false)
     this.synth.dispose()
     this.piano.dispose()
+    this.accompPiano.dispose()
+    this.melodyBus.dispose()
+    this.accompBus.dispose()
     this.click.dispose()
     this.vibrato.dispose()
     this.reverb.dispose()

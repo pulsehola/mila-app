@@ -1,7 +1,9 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { ImageIcon, Minimize2, Minus, Pause, Play, Plus, Redo2, RefreshCw, Trash2, Undo2, ZoomIn, ZoomOut } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createTapTempo, engine, type Subdivision } from './audio/engine'
+import { createTapTempo, engine, type Mix, type Subdivision } from './audio/engine'
+import { PracticePanel } from './components/PracticePanel'
+import { buildAccompaniment, clampSpeed, measureTimeline, orderedRange, spanAt } from './state/practice'
 import { ArticulationPalette } from './components/ArticulationPalette'
 import { Calibration } from './components/Calibration'
 import { importProfile, loadProfile, restoreProfile } from './recognition/profile'
@@ -112,6 +114,43 @@ export default function App() {
   }, [subdivision])
   const [loopOn, setLoopOn] = useState(false)
   const [loopRange, setLoopRange] = useState<LoopRange | null>(null)
+  // ---- Modo práctica (preferencias del dispositivo, no de la partitura) ----
+  const [practiceOpen, setPracticeOpen] = useState(false)
+  const [speed, setSpeedState] = useState(() => {
+    try {
+      return clampSpeed(Number(localStorage.getItem('mila:speed') ?? 1))
+    } catch {
+      return 1
+    }
+  })
+  const [mix, setMixState] = useState<Mix>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem('mila:mix') ?? 'null') as Partial<Mix> | null
+      return { melody: v?.melody !== false, accomp: v?.accomp === true }
+    } catch {
+      return { melody: true, accomp: false }
+    }
+  })
+  useEffect(() => {
+    engine.setSpeed(speed)
+    try {
+      localStorage.setItem('mila:speed', String(speed))
+    } catch {
+      /* sin almacenamiento */
+    }
+  }, [speed])
+  useEffect(() => {
+    engine.setMix(mix)
+    try {
+      localStorage.setItem('mila:mix', JSON.stringify(mix))
+    } catch {
+      /* sin almacenamiento */
+    }
+  }, [mix])
+  /** Fragmento que está sonando (para el cursor continuo). */
+  const [playRange, setPlayRange] = useState<LoopRange | null>(null)
+  /** Compás que está sonando (para marcar A/B mientras suena). */
+  const playingMeasure = useRef<number | null>(null)
   const [modal, setModal] = useState<Modal>(null)
   const [fingerDraw, setFingerDraw] = useState(false)
   /** Pantalla de escritura: se ocultan barras y paleta para escribir con todo el iPad (sobre todo en horizontal). */
@@ -179,7 +218,10 @@ export default function App() {
   useEffect(() => engine.setSound(score.sound ?? 'trumpet'), [score.sound])
 
   useEffect(() => {
-    engine.onCursor = (c) => setCursorId(c?.noteId ?? null)
+    engine.onCursor = (c) => {
+      playingMeasure.current = c?.measure ?? null
+      setCursorId(c?.noteId ?? null)
+    }
     engine.onBeat = () => transportRef.current?.pulse()
     engine.onStop = () => setPlaying(false)
     return () => {
@@ -205,18 +247,64 @@ export default function App() {
       showToast('Escribe alguna nota para poder escucharla.', 'warn')
       return
     }
+    const accompaniment = buildAccompaniment(score.measures, score.transposition, range, meter, keySig)
     engine.setMetronome(metro)
     engine.setMeter(meter)
+    engine.setSpeed(speed)
+    engine.setMix(mix)
     setMetroOnly(false)
-    await engine.play({ events, totalUnits, loop: loopOn, bpm: score.bpm })
+    setPlayRange(range)
+    await engine.play({ events, totalUnits, loop: loopOn, bpm: score.bpm, accompaniment })
     setPlaying(true)
-  }, [loopOn, loopRange, lastUsed, score.measures, score.transposition, score.bpm, meter, keySig, metro, showToast])
+  }, [loopOn, loopRange, lastUsed, score.measures, score.transposition, score.bpm, meter, keySig, metro, speed, mix, showToast])
+
+
+  /** Compás para A/B: el que suena o, parada la música, el de la nota seleccionada. */
+  const practiceMeasure = useCallback((): number | null => {
+    if (engine.isPlaying) {
+      // Del audio, no del dibujo: la posición que se oye ahora mismo dice en qué compás estamos.
+      const u = engine.positionUnits
+      const span = u === null ? null : spanAt(measureTimeline(score.measures, playRange, meter), u)
+      if (span) return span.measure
+      if (playingMeasure.current !== null) return playingMeasure.current
+    }
+    if (selectedId) {
+      const mi = score.measures.findIndex((m) => m.some((n) => n.id === selectedId))
+      if (mi >= 0) return mi
+    }
+    showToast('Toca una nota del compás, o pon la música en marcha, y luego marca A o B.', 'warn')
+    return null
+  }, [selectedId, score.measures, playRange, meter, showToast])
+
+  const markA = useCallback(() => {
+    const mi = practiceMeasure()
+    if (mi === null) return
+    setLoopRange((r) => orderedRange(mi, r ? Math.max(r.end, mi) : mi))
+    setLoopOn(true)
+  }, [practiceMeasure])
+  const markB = useCallback(() => {
+    const mi = practiceMeasure()
+    if (mi === null) return
+    setLoopRange((r) => orderedRange(r ? r.start : mi, mi))
+    setLoopOn(true)
+  }, [practiceMeasure])
+  const repeatMeasure = useCallback(() => {
+    const mi = practiceMeasure()
+    if (mi === null) return
+    setLoopRange({ start: mi, end: mi })
+    setLoopOn(true)
+  }, [practiceMeasure])
+  const clearLoop = useCallback(() => {
+    setLoopOn(false)
+    setLoopRange(null)
+  }, [])
 
   const stopPlayback = useCallback(() => {
     engine.stop(false)
     setPlaying(false)
     setMetroOnly(false)
     setCursorId(null)
+    playingMeasure.current = null
   }, [])
 
   const togglePlay = useCallback(() => {
@@ -874,7 +962,26 @@ export default function App() {
         )}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <AnimatePresence>
-            {loopOn && (
+            {practiceOpen && !focus && (
+              <PracticePanel
+                key="practice"
+                speed={speed}
+                onSpeed={(v) => setSpeedState(clampSpeed(v))}
+                bpm={score.bpm}
+                loopOn={loopOn}
+                loopRange={loopRange}
+                onA={markA}
+                onB={markB}
+                onRepeatMeasure={repeatMeasure}
+                onClearLoop={clearLoop}
+                mix={mix}
+                onMix={setMixState}
+                onClose={() => setPracticeOpen(false)}
+              />
+            )}
+          </AnimatePresence>
+          <AnimatePresence>
+            {loopOn && !practiceOpen && (
               <motion.div
                 className="pointer-events-none absolute bottom-4 left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-full bg-sun px-4 py-1.5 text-xs font-extrabold text-[#2b2118] shadow-lg"
                 initial={{ opacity: 0, y: 12, scale: 0.9 }}
@@ -936,6 +1043,8 @@ export default function App() {
             transposition={score.transposition}
             selectedId={selectedId}
             cursorId={cursorId}
+            playing={playing}
+            playRange={playRange}
             loopMode={loopOn}
             loopRange={loopOn ? loopRange : null}
             fingerDraw={fingerDraw}
@@ -1064,6 +1173,9 @@ export default function App() {
         subdivision={subdivision}
         onSubdivision={() => setSubdivision((s) => ((s % 4) + 1) as Subdivision)}
         onLoop={() => setLoopOn((v) => !v)}
+        practice={practiceOpen}
+        speedLabel={`${Math.round(speed * 100)} %`}
+        onPractice={() => setPracticeOpen((v) => !v)}
       />
       )}
 
