@@ -59,6 +59,21 @@ Botón **práctica** (birrete) en la barra de abajo:
   (I ii iii IV V vi) por medio compás según las notas de la melodía y la armadura, en altura real, y lo toca como
   bajo + acorde con un piano sintetizado.
 
+## Exportar
+
+**Compartir** (arriba a la derecha) → PDF, imagen PNG, MIDI o MusicXML. PDF y PNG usan la misma maquetación
+(`export/pages.ts`): páginas A4, márgenes de 15 mm, título y subtítulo en la primera página, número de página al pie,
+y ningún sistema partido entre dos páginas.
+
+- **PDF:** todas las páginas. Cada sistema se dibuja aparte a 450 ppp a partir del SVG de VexFlow (recortado con
+  `viewBox`), así el iPad nunca pasa su límite de tamaño de canvas. Se incrusta como JPEG de alta calidad: ampliado
+  8 veces se ve igual que en PNG y se genera 4 veces más rápido.
+- **PNG:** una imagen por página A4 a 300 ppp (2480 × 3508 px), idéntica a la del PDF; se pueden exportar todas o
+  una sola página (`mila-titulo-pagina-2.png`).
+- Solo sale la partitura: notas y anotaciones a mano (en azul). Ni botones, ni cursor, ni marcas de la app.
+  Una partitura escaneada sale tal como se ve (papel + notas + anotaciones), sin cortar la foto.
+- En iPad, **Compartir…** abre la hoja del sistema (Guardar en Archivos, Guardar imagen, WhatsApp, AirDrop…).
+
 ## Estructura
 
 ```
@@ -67,6 +82,6 @@ src/
   recognition/   geometría de trazos, clasificador heurístico, tachado
   notation/      renderizado VexFlow + mapa de posiciones de notas/compases
   audio/         motor Tone.js (trompeta, metrónomo, bucle) y detector de altura YIN
-  export/        PDF (jsPDF), MIDI, MusicXML, Web Share
+  export/        páginas A4 (pages.ts), PDF (jsPDF) y PNG por página, MIDI, MusicXML, Web Share
   state/         modelo musical, ejemplos, historial + autoguardado, práctica (acompañamiento, línea de tiempo)
 ```

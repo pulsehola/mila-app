@@ -1,16 +1,19 @@
 import type { Annotation, Background, Score } from '../types'
+import { MARGIN_TOP, MARGIN_X, PAGE_H, PAGE_W, planPages, pxPerPt, USABLE_W, type PagePlan } from './pages'
 import { getImage } from '../state/library'
-import { type Layout, renderScore } from '../notation/renderScore'
+import { type Layout, renderScore, scoreRenderOpts } from '../notation/renderScore'
 import { clampKey } from '../state/music'
 import { drawAnnotations } from '../notation/annotations'
 
-const PAGE_W = 595.28
-const PAGE_H = 841.89
-const MARGIN = 36
-const RENDER_W = 760 // ancho lógico del SVG; se escala al ancho útil de la página
+/** Ancho lógico del SVG (unidades de VexFlow); se escala al ancho útil de la página. */
+const RENDER_W = 760
 const PER_ROW = 4
-const ROWS_FIRST_PAGE = 6
-const ROWS_OTHER = 7
+/** Separación entre sistemas en papel: algo más compacta que en pantalla (8 sistemas por página A4). */
+const PRINT_ROW_H = 128
+/** Resolución de la música en el PDF (ppp): por encima de lo que da una impresora normal. */
+const PDF_DPI = 450
+/** Resolución de cada página PNG (ppp). A4 a 300 ppp = 2480 x 3508 px (cabe en el límite de canvas del iPad). */
+export const PNG_DPI = 300
 /** Las anotaciones salen en azul lápiz oscuro: se distinguen de la música incluso impresas en gris. */
 const ANNOT_PRINT = '#1f3f8f'
 
@@ -170,170 +173,270 @@ async function renderAsSeen(score: Score, scale: number): Promise<AsSeen> {
   }
 }
 
-function sliceCanvas(src: HTMLCanvasElement, y0: number, y1: number): HTMLCanvasElement {
-  const c = document.createElement('canvas')
-  c.width = src.width
-  c.height = Math.max(1, y1 - y0)
-  c.getContext('2d')!.drawImage(src, 0, y0, src.width, c.height, 0, 0, src.width, c.height)
-  return c
-}
-
 function subtitle(score: Score): string {
-  return `Trompeta ${score.transposition === 'Bb' ? 'en Sib (música escrita)' : 'en Do (altura real)'}  -  negra = ${score.bpm}`
+  return `Trompeta ${score.transposition === 'Bb' ? 'en Sib · música escrita' : 'en Do · altura real'}`
 }
 
-/** PDF A4 con la partitura en negro sobre blanco, título, numeración de compases y anotaciones. */
+/** Hasta el último compás con notas o anotaciones (sin compases vacíos de cola); al menos un sistema. */
+export function usedMeasureCount(score: Score): number {
+  const lastUsed = Math.max(
+    score.measures.reduce((acc, m, i) => (m.length ? i : acc), -1),
+    ...(score.annotations ?? []).map((a) => a.measure),
+  )
+  return Math.min(score.measures.length, Math.max(lastUsed + 1, Math.min(PER_ROW, score.measures.length)))
+}
+
+// ---- Hoja: la partitura cortada en sistemas ----------------------------------------
+
+interface Band {
+  /** Recorte vertical en unidades de la hoja. */
+  y0: number
+  y1: number
+}
+
+interface Sheet {
+  /** Ancho en unidades de la hoja (se escala a USABLE_W). */
+  width: number
+  bands: Band[]
+  /** Dibuja varios sistemas a `pxPerUnit` y devuelve un canvas por sistema (fondo blanco, sin interfaz). */
+  renderBands(indices: number[], pxPerUnit: number): Promise<HTMLCanvasElement[]>
+  dispose(): void
+}
+
+/** Bordes de cada sistema: a medio camino entre pentagramas (así entran números de compás, líneas adicionales y anotaciones). */
+function bandsFromRows(rows: { yTop: number; yBottom: number }[], height: number): Band[] {
+  return rows.map((r, i) => ({
+    y0: i === 0 ? Math.max(0, r.yTop - 52) : (rows[i - 1].yBottom + r.yTop) / 2,
+    y1: i === rows.length - 1 ? Math.min(height, r.yBottom + 44) : (r.yBottom + rows[i + 1].yTop) / 2,
+  }))
+}
+
+async function svgMarkup(svg: SVGElement): Promise<string> {
+  const clone = svg.cloneNode(true) as SVGElement
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  clone.removeAttribute('style')
+  clone.removeAttribute('width')
+  clone.removeAttribute('height')
+  clone.removeAttribute('viewBox')
+  const style = document.createElementNS('http://www.w3.org/2000/svg', 'style')
+  style.textContent = await loadFontCss()
+  clone.insertBefore(style, clone.firstChild)
+  return new XMLSerializer().serializeToString(clone)
+}
+
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('No se pudo dibujar la partitura'))
+    img.src = url
+  })
+}
+
+function renderPrintLayout(host: HTMLElement, score: Score): Layout {
+  return renderScore(host, score.measures.slice(0, usedMeasureCount(score)), {
+    ...scoreRenderOpts(score),
+    width: RENDER_W,
+    perRow: PER_ROW,
+    measureNumbers: true,
+    timeSig: true,
+    rowH: PRINT_ROW_H,
+  })
+}
+
+/** Partitura digital: un único dibujo de VexFlow; cada sistema se rasteriza por separado recortando el SVG (viewBox). */
+async function digitalSheet(score: Score): Promise<Sheet> {
+  const host = offscreenHost()
+  const layout = renderPrintLayout(host, score)
+  const svg = host.querySelector('svg') as SVGElement
+  const markup = await svgMarkup(svg)
+  const bands = bandsFromRows(layout.rows, layout.height)
+  const annotations = score.annotations ?? []
+  const rowOf = new Map(layout.measures.map((m) => [m.index, m.row]))
+  return {
+    width: layout.width,
+    bands,
+    async renderBands(indices, s) {
+      const urls: string[] = []
+      try {
+        const imgs = await Promise.all(
+          indices.map((i) => {
+            const b = bands[i]
+            const h = b.y1 - b.y0
+            // Un SVG por sistema, con su tamaño final: el navegador lo dibuja en vectorial a esa resolución.
+            const attrs = `width="${Math.round(layout.width * s)}" height="${Math.round(h * s)}" viewBox="0 ${b.y0} ${layout.width} ${h}"`
+            const xml = markup.replace('<svg', `<svg ${attrs}`)
+            const url = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml;charset=utf-8' }))
+            urls.push(url)
+            return loadImage(url)
+          }),
+        )
+        // Safari decodifica las fuentes del SVG de forma asíncrona: se espera un instante antes de pintar.
+        await new Promise((r) => setTimeout(r, 160))
+        return indices.map((i, k) => {
+          const b = bands[i]
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.round(layout.width * s)
+          canvas.height = Math.round((b.y1 - b.y0) * s)
+          const c = canvas.getContext('2d')!
+          c.fillStyle = '#ffffff'
+          c.fillRect(0, 0, canvas.width, canvas.height)
+          c.drawImage(imgs[k], 0, 0, canvas.width, canvas.height)
+          // Anotaciones a mano de los compases de este sistema (azul lápiz oscuro).
+          const own = annotations.filter((a) => rowOf.get(a.measure) === i)
+          if (own.length) {
+            c.setTransform(s, 0, 0, s, 0, -b.y0 * s)
+            drawAnnotations(c, own, layout, ANNOT_PRINT, 0)
+            c.setTransform(1, 0, 0, 1, 0, 0)
+          }
+          return canvas
+        })
+      } finally {
+        for (const u of urls) URL.revokeObjectURL(u)
+      }
+    },
+    dispose: () => host.remove(),
+  }
+}
+
+/** Partitura escaneada: la hoja tal como se ve (papel + notas + anotaciones), cortada entre pentagramas. */
+async function scannedSheet(score: Score): Promise<Sheet> {
+  const SCALE = 2.5
+  const { canvas, cuts } = await renderAsSeen(score, SCALE)
+  const edges = [0, ...cuts, canvas.height]
+  const bands: Band[] = edges.slice(1).map((e, i) => ({ y0: edges[i] / SCALE, y1: e / SCALE }))
+  return {
+    width: canvas.width / SCALE,
+    bands,
+    async renderBands(indices, s) {
+      return indices.map((i) => {
+        const b = bands[i]
+        const out = document.createElement('canvas')
+        out.width = Math.round((canvas.width / SCALE) * s)
+        out.height = Math.max(1, Math.round((b.y1 - b.y0) * s))
+        const c = out.getContext('2d')!
+        c.imageSmoothingQuality = 'high'
+        c.drawImage(canvas, 0, b.y0 * SCALE, canvas.width, (b.y1 - b.y0) * SCALE, 0, 0, out.width, out.height)
+        return out
+      })
+    },
+    dispose: () => {},
+  }
+}
+
+async function prepare(score: Score): Promise<{ sheet: Sheet; k: number; pages: PagePlan[] }> {
+  const sheet = score.background ? await scannedSheet(score) : await digitalSheet(score)
+  const k = USABLE_W / sheet.width // pt por unidad de la hoja
+  const pages = planPages(sheet.bands.map((b) => ({ height: (b.y1 - b.y0) * k })), { justify: !score.background })
+  return { sheet, k, pages }
+}
+
+/** Número de páginas A4 que ocupa la partitura (para elegir qué página exportar). */
+export async function pageCount(score: Score): Promise<number> {
+  if (score.background) {
+    const { pages, sheet } = await prepare(score)
+    sheet.dispose()
+    return pages.length
+  }
+  const host = offscreenHost()
+  try {
+    const layout = renderPrintLayout(host, score)
+    const k = USABLE_W / layout.width
+    return planPages(bandsFromRows(layout.rows, layout.height).map((b) => ({ height: (b.y1 - b.y0) * k }))).length
+  } finally {
+    host.remove()
+  }
+}
+
+const FONT = '"Plus Jakarta Sans Variable", "Plus Jakarta Sans", system-ui, sans-serif'
+
+function footerText(score: Score, page: number, total: number): string {
+  return `${score.title || 'Sin título'} · página ${page + 1} de ${total} · MILA`
+}
+
+/** PDF A4: título, subtítulo, música nítida (450 ppp), márgenes de 15 mm y número de página. Sin nada de la interfaz. */
 export async function scoreToPdf(score: Score): Promise<Blob> {
   const { jsPDF } = await import('jspdf') // carga bajo demanda: solo pesa al exportar
-  const pdf = new jsPDF({ unit: 'pt', format: 'a4' })
-  if (score.background) return asSeenPdf(pdf, score)
-  const host = offscreenHost()
-  const annotations = score.annotations ?? []
-
+  const pdf = new jsPDF({ unit: 'pt', format: 'a4', compress: true })
+  pdf.setProperties({ title: score.title || 'Partitura', creator: 'MILA' })
+  const { sheet, k, pages } = await prepare(score)
   try {
-    const perPage = [ROWS_FIRST_PAGE * PER_ROW]
-    const rest = ROWS_OTHER * PER_ROW
-    let used = perPage[0]
-    while (used < score.measures.length) {
-      perPage.push(rest)
-      used += rest
-    }
-
-    let cursor = 0
-    const usableW = PAGE_W - MARGIN * 2
-    for (let page = 0; page < perPage.length; page++) {
-      const slice = score.measures.slice(cursor, cursor + perPage[page])
-      if (slice.length === 0 && page > 0) break
-      if (page > 0) pdf.addPage()
-
-      let y = MARGIN
-      if (page === 0) {
+    const s = k * pxPerPt(PDF_DPI)
+    for (const page of pages) {
+      if (page.index > 0) pdf.addPage()
+      if (page.header) {
         pdf.setFont('helvetica', 'bold')
         pdf.setFontSize(22)
-        pdf.text(score.title || 'Sin título', PAGE_W / 2, y + 14, { align: 'center' })
+        pdf.text(score.title || 'Sin título', PAGE_W / 2, MARGIN_TOP + 16, { align: 'center' })
         pdf.setFont('helvetica', 'normal')
         pdf.setFontSize(10)
-        pdf.text(subtitle(score), PAGE_W / 2, y + 32, { align: 'center' })
-        y += 46
+        pdf.setTextColor(90)
+        pdf.text(subtitle(score), PAGE_W / 2, MARGIN_TOP + 34, { align: 'center' })
+        pdf.setTextColor(0)
       }
-
-      const layout = renderScore(host, slice, {
-        meter: score.meter,
-        clef: score.clef,
-        key: clampKey(score.key),
-        width: RENDER_W,
-        perRow: PER_ROW,
-        firstIndex: cursor,
-        measureNumbers: true,
-        timeSig: cursor === 0,
+      const canvases = await sheet.renderBands(page.bands.map((b) => b.band), s)
+      page.bands.forEach((b, i) => {
+        // JPEG de alta calidad a 450 ppp: a 8 aumentos se ve igual que PNG y se genera 4 veces más rápido
+        // (el PNG lo comprime jsPDF en JavaScript; el JPEG lo codifica el navegador). Importa en el iPad.
+        pdf.addImage(canvases[i].toDataURL('image/jpeg', 0.92), 'JPEG', MARGIN_X, b.y, USABLE_W, b.height)
+        canvases[i].width = canvases[i].height = 0 // libera memoria (Safari en iPad)
       })
-      const svg = host.querySelector('svg') as SVGElement
-      const canvas = await rasterize(svg, layout, 2.4, annotations, cursor)
-      const scale = usableW / layout.width
-      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', MARGIN, y, usableW, layout.height * scale, undefined, 'MEDIUM')
-
       pdf.setFontSize(8)
       pdf.setTextColor(140)
-      pdf.text(`MILA · página ${page + 1}`, PAGE_W / 2, PAGE_H - 20, { align: 'center' })
+      pdf.text(footerText(score, page.index, pages.length), PAGE_W / 2, PAGE_H - 22, { align: 'center' })
       pdf.setTextColor(0)
-      cursor += perPage[page]
-      if (cursor >= score.measures.length) break
     }
   } finally {
-    host.remove()
+    sheet.dispose()
   }
   return pdf.output('blob')
 }
 
-/** PDF de una partitura escaneada: la hoja tal como se ve, repartida en páginas A4 sin partir pentagramas. */
-async function asSeenPdf(pdf: import('jspdf').jsPDF, score: Score): Promise<Blob> {
-  const { canvas, cuts } = await renderAsSeen(score, 2)
-  const usableW = PAGE_W - MARGIN * 2
-  const k = usableW / canvas.width // pt por px del canvas
-  let y = 0
-  let page = 0
-  while (y < canvas.height - 2) {
-    if (page > 0) pdf.addPage()
-    let top = MARGIN
-    if (page === 0) {
-      pdf.setFont('helvetica', 'bold')
-      pdf.setFontSize(20)
-      pdf.text(score.title || 'Sin título', PAGE_W / 2, top + 12, { align: 'center' })
-      pdf.setFont('helvetica', 'normal')
-      pdf.setFontSize(9)
-      pdf.text(subtitle(score), PAGE_W / 2, top + 28, { align: 'center' })
-      top += 40
-    }
-    const room = (PAGE_H - top - MARGIN) / k // px que caben en esta página
-    let end = Math.min(canvas.height, y + room)
-    if (end < canvas.height) {
-      // Cortar entre dos pentagramas (el último corte que quepa).
-      const fit = cuts.filter((c) => c > y + 40 && c <= end)
-      if (fit.length) end = fit[fit.length - 1]
-    }
-    const part = sliceCanvas(canvas, Math.round(y), Math.round(end))
-    pdf.addImage(part.toDataURL('image/jpeg', 0.9), 'JPEG', MARGIN, top, usableW, part.height * k, undefined, 'MEDIUM')
-    pdf.setFontSize(8)
-    pdf.setTextColor(140)
-    pdf.text(`MILA · página ${page + 1}`, PAGE_W / 2, PAGE_H - 20, { align: 'center' })
-    pdf.setTextColor(0)
-    y = end
-    page++
-    if (page > 40) break
-  }
-  return pdf.output('blob')
-}
-
-/** Imagen PNG nítida de toda la partitura (ideal para enviar por WhatsApp). */
-export async function scoreToPng(score: Score): Promise<Blob> {
-  const host = offscreenHost()
+/**
+ * Cada página A4 como imagen PNG (300 ppp), idéntica a la del PDF. `only` = número de página (desde 0) para
+ * exportar solo esa; sin él, todas.
+ */
+export async function scoreToPngPages(score: Score, only?: number): Promise<Blob[]> {
+  const { sheet, k, pages } = await prepare(score)
+  const ppt = pxPerPt(PNG_DPI)
+  const out: Blob[] = []
   try {
-    const W = 1000
-    const SCALE = 2
-    const HEADER = 92
-    // Hasta el último compás con notas o anotaciones (sin compases vacíos de cola).
-    const lastUsed = Math.max(
-      score.measures.reduce((acc, m, i) => (m.length ? i : acc), 0),
-      ...(score.annotations ?? []).map((a) => a.measure),
-    )
-    const measures = score.measures.slice(0, Math.max(lastUsed + 1, 4))
-    const sheet = score.background
-      ? (await renderAsSeen(score, (SCALE * W) / score.background.layoutWidth)).canvas
-      : await (async () => {
-          const layout = renderScore(host, measures, { meter: score.meter, clef: score.clef, key: clampKey(score.key), width: W, perRow: PER_ROW, measureNumbers: true })
-          const svg = host.querySelector('svg') as SVGElement
-          return rasterize(svg, layout, SCALE, score.annotations ?? [], 0)
-        })()
-
-    const out = document.createElement('canvas')
-    out.width = sheet.width
-    out.height = sheet.height + HEADER * SCALE
-    const c = out.getContext('2d')!
-    c.fillStyle = '#ffffff'
-    c.fillRect(0, 0, out.width, out.height)
-    c.drawImage(sheet, 0, HEADER * SCALE)
-    c.scale(SCALE, SCALE)
-    c.fillStyle = '#1d1a2e'
-    c.textAlign = 'center'
-    const font = '"Plus Jakarta Sans Variable", "Plus Jakarta Sans", system-ui, sans-serif'
-    c.font = `800 30px ${font}`
-    c.fillText(score.title || 'Sin título', W / 2, 46)
-    c.font = `500 13px ${font}`
-    c.fillStyle = '#6b6478'
-    c.fillText(subtitle(score).replace('  -  ', ' · '), W / 2, 70)
-    // Firma de marca: MI (menta) + LA (latón), discreta en la esquina.
-    c.textAlign = 'right'
-    c.font = `800 13px ${font}`
-    const laW = c.measureText('LA').width
-    c.fillStyle = '#d99a1e'
-    c.fillText('LA', W - 18, 26)
-    c.fillStyle = '#10b88a'
-    c.fillText('MI', W - 18 - laW, 26)
-
-    return await new Promise<Blob>((resolve, reject) =>
-      out.toBlob((b) => (b ? resolve(b) : reject(new Error('No se pudo crear la imagen'))), 'image/png'),
-    )
+    for (const page of pages) {
+      if (only !== undefined && page.index !== only) continue
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(PAGE_W * ppt)
+      canvas.height = Math.round(PAGE_H * ppt)
+      const c = canvas.getContext('2d')!
+      c.fillStyle = '#ffffff'
+      c.fillRect(0, 0, canvas.width, canvas.height)
+      const bands = await sheet.renderBands(page.bands.map((b) => b.band), k * ppt)
+      c.imageSmoothingQuality = 'high'
+      page.bands.forEach((b, i) => {
+        c.drawImage(bands[i], MARGIN_X * ppt, b.y * ppt, USABLE_W * ppt, b.height * ppt)
+        bands[i].width = bands[i].height = 0
+      })
+      c.setTransform(ppt, 0, 0, ppt, 0, 0)
+      c.textAlign = 'center'
+      if (page.header) {
+        c.fillStyle = '#1d1a2e'
+        c.font = `800 22px ${FONT}`
+        c.fillText(score.title || 'Sin título', PAGE_W / 2, MARGIN_TOP + 16)
+        c.fillStyle = '#5a5566'
+        c.font = `500 10px ${FONT}`
+        c.fillText(subtitle(score), PAGE_W / 2, MARGIN_TOP + 34)
+      }
+      c.fillStyle = '#8c8796'
+      c.font = `500 8px ${FONT}`
+      c.fillText(footerText(score, page.index, pages.length), PAGE_W / 2, PAGE_H - 22)
+      out.push(
+        await new Promise<Blob>((resolve, reject) =>
+          canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('No se pudo crear la imagen'))), 'image/png'),
+        ),
+      )
+      canvas.width = canvas.height = 0
+    }
   } finally {
-    host.remove()
+    sheet.dispose()
   }
+  return out
 }

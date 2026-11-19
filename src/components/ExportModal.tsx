@@ -3,15 +3,16 @@ import { Check, Download, FileImage, FileMusic, FileText, Loader2, MessageCircle
 import { useEffect, useRef, useState } from 'react'
 import type { Score } from '../types'
 import {
-  buildFile,
+  buildFiles,
   canNativeShare,
   downloadScore,
   FORMAT_INFO,
   type ExportFormat,
   type ShareResult,
-  shareFile,
+  shareFiles,
   shareScore,
 } from '../export/share'
+import { pageCount } from '../export/pdf'
 import { Modal } from './ui'
 import { ELASTIC } from './springs'
 
@@ -34,22 +35,37 @@ export function ExportModal({ open, onClose, score, onToast }: Props) {
 
   // El archivo para WhatsApp se genera al abrir: así el toque abre la hoja de compartir al instante
   // (Safari solo permite navigator.share justo después del gesto).
-  const [ready, setReady] = useState<{ score: Score; fmt: WaFormat; file: File } | null>(null)
+  const [ready, setReady] = useState<{ score: Score; fmt: WaFormat; files: File[] } | null>(null)
+  /** Páginas A4 de la partitura y cuál exportar como PNG (null = todas). */
+  const [pages, setPages] = useState(1)
+  const [pngPage, setPngPage] = useState<number | null>(null)
+  useEffect(() => {
+    if (!open || empty) return
+    let alive = true
+    void pageCount(score).then((n) => {
+      if (!alive) return
+      setPages(n)
+      setPngPage((p) => (p !== null && p >= n ? null : p))
+    })
+    return () => {
+      alive = false
+    }
+  }, [open, empty, score])
   const building = useRef<string>('')
   useEffect(() => {
     if (!open || empty) return
     if (ready && ready.score === score && ready.fmt === waFmt) return
     const key = `${waFmt}:${Date.now()}`
     building.current = key
-    void buildFile(score, waFmt)
-      .then((file) => {
-        if (building.current === key) setReady({ score, fmt: waFmt, file })
+    void buildFiles(score, waFmt)
+      .then((files) => {
+        if (building.current === key) setReady({ score, fmt: waFmt, files })
       })
       .catch(() => {
         /* se reintenta al pulsar */
       })
   }, [open, empty, score, waFmt, ready])
-  const waFile = ready && ready.score === score && ready.fmt === waFmt ? ready.file : null
+  const waFiles = ready && ready.score === score && ready.fmt === waFmt ? ready.files : null
 
   const report = (r: ShareResult) => {
     if (r === 'shared') onToast('Enviado ✓')
@@ -63,15 +79,15 @@ export function ExportModal({ open, onClose, score, onToast }: Props) {
       return
     }
     const title = score.title || 'Partitura MILA'
-    if (waFile) {
-      report(await shareFile(waFile, title)) // sin await previo: conserva el gesto
+    if (waFiles) {
+      report(await shareFiles(waFiles, title)) // sin await previo: conserva el gesto
       return
     }
     setBusy('wa')
     try {
-      const file = await buildFile(score, waFmt)
-      setReady({ score, fmt: waFmt, file })
-      report(await shareFile(file, title))
+      const files = await buildFiles(score, waFmt)
+      setReady({ score, fmt: waFmt, files })
+      report(await shareFiles(files, title))
     } catch (e) {
       onToast(e instanceof Error ? e.message : 'No se pudo preparar el archivo', 'warn')
     } finally {
@@ -86,11 +102,12 @@ export function ExportModal({ open, onClose, score, onToast }: Props) {
     }
     setBusy(kind)
     try {
+      const page = fmt === 'png' && pngPage !== null ? pngPage : undefined
       if (kind === 'download') {
-        await downloadScore(score, fmt)
-        onToast(`${FORMAT_INFO[fmt].label} descargado ✓`)
+        const n = await downloadScore(score, fmt, page)
+        onToast(n > 1 ? `${n} imágenes descargadas ✓` : `${FORMAT_INFO[fmt].label} descargado ✓`)
       } else {
-        report(await shareScore(score, fmt))
+        report(await shareScore(score, fmt, page))
       }
     } catch (e) {
       onToast(e instanceof Error ? e.message : 'No se pudo exportar', 'warn')
@@ -155,9 +172,11 @@ export function ExportModal({ open, onClose, score, onToast }: Props) {
                 <motion.span key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                   Escribe alguna nota para poder enviarla.
                 </motion.span>
-              ) : waFile ? (
+              ) : waFiles ? (
                 <motion.span key="ok" className="flex items-center gap-1" initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                  <Check size={14} style={{ color: WA_GREEN }} /> {FORMAT_INFO[waFmt].label} lista · elige WhatsApp en la hoja de compartir
+                  <Check size={14} style={{ color: WA_GREEN }} />{' '}
+                  {waFmt === 'png' && waFiles.length > 1 ? `${waFiles.length} imágenes (una por página) listas` : `${FORMAT_INFO[waFmt].label} lista`} · elige
+                  WhatsApp en la hoja de compartir
                 </motion.span>
               ) : (
                 <motion.span key="prep" className="flex items-center gap-1" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -204,6 +223,28 @@ export function ExportModal({ open, onClose, score, onToast }: Props) {
           })}
         </div>
 
+        {fmt === 'png' && pages > 1 && (
+          <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Página a exportar">
+            <span className="text-xs font-bold text-muted">Páginas:</span>
+            {[null, ...Array.from({ length: pages }, (_, i) => i)].map((p) => {
+              const on = pngPage === p
+              return (
+                <button
+                  key={p ?? 'all'}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => setPngPage(p)}
+                  className="h-9 min-w-[44px] rounded-full border border-line px-3 text-sm font-extrabold"
+                  style={{ background: on ? 'var(--coral)' : 'var(--paper)', color: on ? '#fff' : 'var(--ink)' }}
+                >
+                  {p === null ? `Todas (${pages})` : p + 1}
+                </button>
+              )
+            })}
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-2">
           <motion.button
             type="button"
@@ -232,7 +273,7 @@ export function ExportModal({ open, onClose, score, onToast }: Props) {
           {canNativeShare()
             ? 'Compartir abre la hoja del sistema: AirDrop, WhatsApp, Mensajes, Archivos…'
             : 'Este navegador no tiene hoja de compartir nativa; se descargará el archivo.'}
-          {' Las anotaciones a mano salen en PDF e imagen.'}
+          {' PDF e imágenes salen en páginas A4 con lo que se ve en la partitura (notas y anotaciones a mano), sin botones ni marcas de la app.'}
           {score.transposition === 'Bb' && (fmt === 'midi' || fmt === 'xml') ? ' El MIDI suena en altura real; el MusicXML conserva la transposición a Sib.' : ''}
         </p>
       </div>

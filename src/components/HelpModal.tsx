@@ -141,7 +141,7 @@ export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onC
           <li>Zoom: pellizca con dos dedos (o el trackpad del Mac, o ⌘+ / ⌘−); dos dedos también desplazan la hoja.</li>
           <li>
             Modo <b>Anotar</b> (abajo a la izquierda): textos como “ENTRA DIRECTO”, flechas o recuadros se guardan tal cual, en
-            azul, pegados a su compás. Tacha en zig-zag por encima para borrarlos. También salen en el PDF y la imagen.
+            azul, pegados a su compás. Tacha en zig-zag por encima para borrarlos. También salen en el PDF y en las imágenes PNG (una por página A4, todas o la que elijas en Compartir).
           </li>
           <li>
             <b>Goma</b>: toca una nota o pasa por encima de varias para borrarlas (también anotaciones). La papelera de al
