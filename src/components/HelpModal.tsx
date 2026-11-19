@@ -154,6 +154,13 @@ export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onC
             iCloud Drive, Drive…); en la compu, la ventana de guardar. «Abrir desde Archivos» las trae de vuelta.
           </li>
           <li>
+            <b>Importar MusicXML</b>: «Abrir desde Archivos» también abre archivos <b>.musicxml</b> y <b>.mxl</b> de MuseScore,
+            Audiveris, PlayScore, Flat… Es la forma de traer una partitura reconocida por otro programa. MILA toma una sola
+            parte (la de trompeta si la hay), una voz, y de los acordes la nota de arriba; al terminar te dice qué no pudo
+            representar. Si el archivo no indica el instrumento, se abre como trompeta en Sib (las notas tal como están
+            escritas): cámbialo arriba a «Do» si era música en altura real.
+          </li>
+          <li>
             <b>Escanear</b> (en Mis partituras o en una hoja vacía): haz una foto o sube un PDF de tu partitura de papel.
             MILA la endereza, <b>lee sus notas y compases</b> y los convierte en notas editables alineadas encima del papel
             (es un borrador: revisa y corrige). Con <b>Fondo</b> puedes reajustar o «Detectar notas» otra vez. Al

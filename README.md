@@ -74,6 +74,21 @@ y ningún sistema partido entre dos páginas.
   Una partitura escaneada sale tal como se ve (papel + notas + anotaciones), sin cortar la foto.
 - En iPad, **Compartir…** abre la hoja del sistema (Guardar en Archivos, Guardar imagen, WhatsApp, AirDrop…).
 
+## Importar MusicXML
+
+«Mis partituras → Abrir desde Archivos» abre `.musicxml`, `.xml` y `.mxl` (comprimido) además de las copias
+`.mila.json` (`src/import/`). Así se usa cualquier programa de reconocimiento de partituras (Audiveris, PlayScore,
+Flat…) o de notación (MuseScore). Sin servidor ni dependencias: el `.mxl` se descomprime con `DecompressionStream`.
+
+- Se importa **una parte** (la de trompeta si hay varias), la **primera voz** del primer pentagrama y, de cada acorde,
+  la nota más aguda. Máximo 64 compases.
+- **Altura escrita/real**: con `<transpose>` de Sib → trompeta en Sib; sin `<transpose>` (lo habitual en OMR) se usa
+  la transposición abierta y se avisa; otros transpositores se pasan a altura real (Do).
+- Todo lo que MILA no puede representar (ligaduras de prolongación, dobles alteraciones, fusas, cambios de compás,
+  repeticiones…) se lista en el aviso final; nada se descarta en silencio.
+
+Ver también `docs/fase-4-omr.md` (investigación de opciones de OMR).
+
 ## Estructura
 
 ```

@@ -243,6 +243,9 @@ export function Gallery(p: Props) {
           Se guardan solas en este dispositivo, con notas, anotaciones, tempo y todo lo demás.
           <br />
           Con <b className="text-ink">Guardar en…</b> eliges dónde guardar una copia (una carpeta, iCloud Drive, Drive…).
+          <br />
+          <b className="text-ink">Abrir desde Archivos</b> abre copias de MILA y también MusicXML (.musicxml, .mxl) de MuseScore,
+          Audiveris, PlayScore…
         </p>
         <motion.button
           type="button"
@@ -266,7 +269,6 @@ export function Gallery(p: Props) {
         <input
           ref={fileInput}
           type="file"
-          accept=".json,application/json"
           multiple
           hidden
           onChange={(e) => {

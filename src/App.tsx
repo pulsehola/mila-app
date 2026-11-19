@@ -40,6 +40,8 @@ import { BackgroundPanel } from './components/BackgroundPanel'
 import { ScanSheet } from './components/ScanSheet'
 import { fileToScan } from './scan/importScan'
 import { digitize } from './scan/digitize'
+import { isMusicXmlFile, readMusicXmlFile } from './import/musicxml'
+import { ImportReport, type ImportReportItem } from './components/ImportReport'
 import { blobToDataUrl, dataUrlToBlob, deleteImage, getImage, imageIdsOf, parseMilaHand, parseMilaImages, putImage } from './state/library'
 import { newId } from './state/music'
 import { useImageUrl } from './state/useImageUrl'
@@ -189,6 +191,8 @@ export default function App() {
     void restoreProfile().catch(() => undefined)
   }, [])
   const [toast, setToast] = useState<{ msg: string; tone: 'info' | 'warn' } | null>(null)
+  /** Resultado de importar MusicXML (avisos de lo que MILA no puede representar). */
+  const [importReport, setImportReport] = useState<ImportReportItem[] | null>(null)
   const transportRef = useRef<TransportHandle>(null)
   const toastTimer = useRef(0)
   const tap = useMemo(() => createTapTempo(), [])
@@ -662,8 +666,43 @@ export default function App() {
     void saveToFiles([{ id: lib.currentId, score, createdAt: known?.createdAt ?? now, updatedAt: now }])
   }, [lib.items, lib.currentId, score, saveToFiles])
 
+  /**
+   * MusicXML (.musicxml, .xml, .mxl) de cualquier programa de OMR o de notación. Uno solo se abre en el
+   * editor; varios van a la galería. Siempre se muestra qué no se pudo representar.
+   */
+  const importMusicXml = useCallback(
+    async (files: File[], openFirst: boolean) => {
+      const report: ImportReportItem[] = []
+      const saved: SavedScore[] = []
+      for (const f of files) {
+        try {
+          const r = await readMusicXmlFile(f, { fallback: score.transposition })
+          report.push({ file: f.name, title: r.score.title, part: r.part, warnings: r.warnings })
+          const now = Date.now()
+          saved.push({ id: newId(), score: r.score, createdAt: now, updatedAt: now })
+        } catch (e) {
+          report.push({ file: f.name, warnings: [], error: e instanceof Error ? e.message : 'No se pudo leer el archivo.' })
+        }
+      }
+      if (openFirst && saved.length === 1) {
+        await startScore(saved[0].score, `Importada: ${saved[0].score.title}`)
+      } else if (saved.length) {
+        const n = await lib.importItems(saved)
+        showToast(`${n} partitura${n === 1 ? '' : 's'} MusicXML añadida${n === 1 ? '' : 's'} a la galería`)
+      }
+      if (report.some((x) => x.error || x.warnings.length)) setImportReport(report)
+    },
+    [lib, score.transposition, showToast, startScore],
+  )
+
   const importFiles = useCallback(
     async (files: File[]) => {
+      const xml: File[] = []
+      const mila: File[] = []
+      for (const f of files) (await isMusicXmlFile(f).catch(() => false) ? xml : mila).push(f)
+      if (xml.length) await importMusicXml(xml, files.length === 1)
+      if (!mila.length) return
+      files = mila
       try {
         const all: SavedScore[] = []
         let handRestored = false
@@ -682,7 +721,7 @@ export default function App() {
         showToast(e instanceof Error ? e.message : 'No se pudo abrir el archivo', 'warn')
       }
     },
-    [lib, showToast],
+    [lib, showToast, importMusicXml],
   )
 
   // ---- Partitura escaneada de fondo -------------------------------------------
@@ -1263,6 +1302,7 @@ export default function App() {
           </motion.button>
         </div>
       </UiModal>
+      <ImportReport items={importReport} onClose={() => setImportReport(null)} />
       <Toast msg={toast?.msg ?? null} tone={toast?.tone ?? 'info'} />
       <AnimatePresence>
         {updateReady && (

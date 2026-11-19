@@ -90,5 +90,6 @@ self.addEventListener('fetch', (e) => {
 export default defineConfig({
   plugins: [react(), tailwindcss(), basicSsl(), offlineServiceWorker()],
   server: { host: true },
-  test: { environment: 'node', include: ['src/**/*.test.ts'] },
+  // execArgv: los tests con jsdom necesitan zlib.createZstdDecompress, que falta en Node < 22.15 (ver el script).
+  test: { environment: 'node', include: ['src/**/*.test.ts'], execArgv: ['--require', './scripts/zstd-shim.cjs'] },
 })
