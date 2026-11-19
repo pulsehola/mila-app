@@ -84,13 +84,12 @@ function describe(r: Recognized): string {
 }
 
 interface Props {
-  /** La primera vez el test es obligatorio: no se puede cerrar. */
-  required: boolean
   onClose: () => void
   onDone: () => void
 }
 
-export function Calibration({ required, onClose, onDone }: Props) {
+/** Test de escritura OPCIONAL (desde la guía de trazos): siempre se puede cerrar y nunca se pide al entrar. */
+export function Calibration({ onClose, onDone }: Props) {
   // Un test a medias (se cerró la app, se recargó...) sigue donde quedó: cada muestra se guarda al momento.
   const [samples, setSamples] = useState<HandProfile['samples']>(loadDraft)
   const [stepIdx, setStepIdx] = useState(() => {
@@ -250,20 +249,19 @@ export function Calibration({ required, onClose, onDone }: Props) {
             <div className="text-[11px] font-bold uppercase tracking-widest text-muted">Test de escritura</div>
             <h1 className="text-2xl font-black leading-tight">Enséñale a Mila tu letra</h1>
           </div>
-          {!required && (
-            <button
-              type="button"
-              aria-label="Cerrar"
-              onClick={() => {
-                // Lo dibujado hasta aquí también sirve: se suma a la letra de Mila.
-                if (Object.values(samples).some((l) => l?.length)) addSamples(samples, false)
-                saveDraft({})
-                onClose()
-              }}
-              className="grid h-11 w-11 place-items-center rounded-2xl border border-line bg-panel">
-              <X size={20} />
-            </button>
-          )}
+          <button
+            type="button"
+            aria-label="Cerrar"
+            onClick={() => {
+              // Lo dibujado hasta aquí también sirve: se suma a la letra de Mila.
+              if (Object.values(samples).some((l) => l?.length)) addSamples(samples, false)
+              saveDraft({})
+              onClose()
+            }}
+            className="grid h-11 w-11 place-items-center rounded-2xl border border-line bg-panel"
+          >
+            <X size={20} />
+          </button>
         </div>
         <p className="mt-1 text-sm text-muted">
           Dibuja cada símbolo {SAMPLES_PER_SYMBOL} veces sobre el pentagrama, como lo escribes normalmente. Mila guarda tus trazos en este

@@ -9,7 +9,6 @@ import { ExportModal } from './components/ExportModal'
 import { HelpModal } from './components/HelpModal'
 import { ModeSwitch } from './components/ModeSwitch'
 import { MAX_ZOOM, MIN_ZOOM, ScoreCanvas } from './components/ScoreCanvas'
-import { Splash } from './components/Splash'
 import { TopBar } from './components/TopBar'
 import { type TransportHandle, TransportBar } from './components/TransportBar'
 import { Tuner } from './components/Tuner'
@@ -78,19 +77,12 @@ export default function App() {
   const [scanBusy, setScanBusy] = useState(false)
   const bgUrl = useImageUrl(score.background?.imageId)
   const [mode, setModeState] = useState<EditMode>('notes')
-  // Test de escritura: obligatorio la primera vez (Mila aprende tu letra); luego se repite desde la guía.
-  const [calib, setCalib] = useState<'required' | 'optional' | null>(null)
-  // El test solo se pide si de verdad no hay resultados guardados: antes se recupera la copia de IndexedDB
-  // (Safari puede vaciar localStorage y por eso Mila tenía que repetirlo).
+  // Test de escritura: NUNCA se abre solo ni bloquea la entrada. Solo desde la guía (?), si Mila quiere
+  // enseñarle más muestras de su letra.
+  const [calib, setCalib] = useState(false)
+  // Los resultados de los tests ya hechos se conservan y se usan para reconocer su letra (con copia en IndexedDB).
   useEffect(() => {
-    // Siempre: así quien ya hizo el test también tiene su copia de seguridad en IndexedDB.
-    let alive = true
-    void restoreProfile().then((ok) => {
-      if (alive && !ok) setCalib((c) => c ?? 'required')
-    })
-    return () => {
-      alive = false
-    }
+    void restoreProfile().catch(() => undefined)
   }, [])
   const [toast, setToast] = useState<{ msg: string; tone: 'info' | 'warn' } | null>(null)
   const transportRef = useRef<TransportHandle>(null)
@@ -893,17 +885,16 @@ export default function App() {
         onClose={() => setModal(null)}
         onRecalibrate={() => {
           setModal(null)
-          setCalib('optional')
+          setCalib(true)
         }}
       />
       <AnimatePresence>
         {calib && (
           <Calibration
             key="calib"
-            required={calib === 'required'}
-            onClose={() => setCalib(null)}
+            onClose={() => setCalib(false)}
             onDone={() => {
-              setCalib(null)
+              setCalib(false)
               showToast('Test completado: Mila ya reconoce tu letra')
             }}
           />
@@ -951,7 +942,6 @@ export default function App() {
         </div>
       </UiModal>
       <Toast msg={toast?.msg ?? null} tone={toast?.tone ?? 'info'} />
-      <Splash />
     </div>
   )
 }
