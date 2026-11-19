@@ -5,7 +5,7 @@ import { Accidental as VfAccidental, Formatter, Renderer, Stave, StaveNote, Voic
 import type { Pt, Stroke } from '../types'
 import { pointsOf, usePenSurface } from '../input/pen'
 import { labelOf, recognizePersonal } from '../recognition/personal'
-import { loadProfile, saveProfile, type HandProfile } from '../recognition/profile'
+import { addSamples, type HandProfile, loadDraft, loadDraftAsync, loadProfile, saveDraft } from '../recognition/profile'
 import { type Recognized, STAFF_GAP, type StaffCtx } from '../recognition/recognize'
 import type { SymbolLabel } from '../recognition/templates'
 import { DUR_LABEL } from '../state/music'
@@ -91,8 +91,27 @@ interface Props {
 }
 
 export function Calibration({ required, onClose, onDone }: Props) {
-  const [stepIdx, setStepIdx] = useState(0)
-  const [samples, setSamples] = useState<HandProfile['samples']>({})
+  // Un test a medias (se cerró la app, se recargó...) sigue donde quedó: cada muestra se guarda al momento.
+  const [samples, setSamples] = useState<HandProfile['samples']>(loadDraft)
+  const [stepIdx, setStepIdx] = useState(() => {
+    const d = loadDraft()
+    return Math.max(0, CALIBRATION_STEPS.findIndex((st) => (d[st.label]?.length ?? 0) < SAMPLES_PER_SYMBOL))
+  })
+  const restored = useRef(false)
+  useEffect(() => {
+    // Si Safari vació localStorage, el borrador puede seguir en IndexedDB.
+    if (Object.keys(samples).length) return
+    void loadDraftAsync().then((d) => {
+      if (restored.current || !Object.keys(d).length) return
+      restored.current = true
+      setSamples(d)
+      setStepIdx(Math.max(0, CALIBRATION_STEPS.findIndex((st) => (d[st.label]?.length ?? 0) < SAMPLES_PER_SYMBOL)))
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => saveDraft(samples), [samples])
+  /** Muestras de tests anteriores que ya conoce (se suman, no se reemplazan). */
+  const previous = Object.values(loadProfile().samples).reduce((n, l) => n + (l?.length ?? 0), 0)
   const [strokes, setStrokes] = useState<Stroke[]>([])
   const [feedback, setFeedback] = useState<string | null>(null)
   const [finished, setFinished] = useState(false)
@@ -204,8 +223,9 @@ export function Calibration({ required, onClose, onDone }: Props) {
   }
 
   const finish = () => {
-    const prev = loadProfile()
-    saveProfile({ version: 1, completedAt: Date.now(), samples: { ...prev.samples, ...samples } })
+    // Se SUMAN a las de tests anteriores (las más recientes de cada símbolo), nunca las reemplazan.
+    addSamples(samples, true)
+    saveDraft({})
     onDone()
   }
 
@@ -231,7 +251,16 @@ export function Calibration({ required, onClose, onDone }: Props) {
             <h1 className="text-2xl font-black leading-tight">Enséñale a Mila tu letra</h1>
           </div>
           {!required && (
-            <button type="button" aria-label="Cerrar" onClick={onClose} className="grid h-11 w-11 place-items-center rounded-2xl border border-line bg-panel">
+            <button
+              type="button"
+              aria-label="Cerrar"
+              onClick={() => {
+                // Lo dibujado hasta aquí también sirve: se suma a la letra de Mila.
+                if (Object.values(samples).some((l) => l?.length)) addSamples(samples, false)
+                saveDraft({})
+                onClose()
+              }}
+              className="grid h-11 w-11 place-items-center rounded-2xl border border-line bg-panel">
               <X size={20} />
             </button>
           )}
@@ -239,6 +268,12 @@ export function Calibration({ required, onClose, onDone }: Props) {
         <p className="mt-1 text-sm text-muted">
           Dibuja cada símbolo {SAMPLES_PER_SYMBOL} veces sobre el pentagrama, como lo escribes normalmente. Mila guarda tus trazos en este
           dispositivo y los usa para reconocer tu caligrafía.
+          {previous > 0 && (
+            <>
+              {' '}
+              Ya conoce <b className="text-ink">{previous} muestras</b> de tests anteriores: las nuevas se suman a esas.
+            </>
+          )}
         </p>
 
         <div className="mt-3 h-2 overflow-hidden rounded-full bg-line">

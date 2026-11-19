@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createTapTempo, engine } from './audio/engine'
 import { ArticulationPalette } from './components/ArticulationPalette'
 import { Calibration } from './components/Calibration'
-import { isCalibrated } from './recognition/profile'
+import { importProfile, loadProfile, restoreProfile } from './recognition/profile'
 import { ExportModal } from './components/ExportModal'
 import { HelpModal } from './components/HelpModal'
 import { ModeSwitch } from './components/ModeSwitch'
@@ -33,7 +33,7 @@ import { BackgroundPanel } from './components/BackgroundPanel'
 import { ScanSheet } from './components/ScanSheet'
 import { fileToScan } from './scan/importScan'
 import { digitize } from './scan/digitize'
-import { blobToDataUrl, dataUrlToBlob, deleteImage, getImage, imageIdsOf, parseMilaImages, putImage } from './state/library'
+import { blobToDataUrl, dataUrlToBlob, deleteImage, getImage, imageIdsOf, parseMilaHand, parseMilaImages, putImage } from './state/library'
 import { newId } from './state/music'
 import { useImageUrl } from './state/useImageUrl'
 import { TOP_PAD } from './notation/renderScore'
@@ -79,7 +79,19 @@ export default function App() {
   const bgUrl = useImageUrl(score.background?.imageId)
   const [mode, setModeState] = useState<EditMode>('notes')
   // Test de escritura: obligatorio la primera vez (Mila aprende tu letra); luego se repite desde la guía.
-  const [calib, setCalib] = useState<'required' | 'optional' | null>(() => (isCalibrated() ? null : 'required'))
+  const [calib, setCalib] = useState<'required' | 'optional' | null>(null)
+  // El test solo se pide si de verdad no hay resultados guardados: antes se recupera la copia de IndexedDB
+  // (Safari puede vaciar localStorage y por eso Mila tenía que repetirlo).
+  useEffect(() => {
+    // Siempre: así quien ya hizo el test también tiene su copia de seguridad en IndexedDB.
+    let alive = true
+    void restoreProfile().then((ok) => {
+      if (alive && !ok) setCalib((c) => c ?? 'required')
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
   const [toast, setToast] = useState<{ msg: string; tone: 'info' | 'warn' } | null>(null)
   const transportRef = useRef<TransportHandle>(null)
   const toastTimer = useRef(0)
@@ -424,7 +436,11 @@ export default function App() {
           const blob = await getImage(id).catch(() => undefined)
           if (blob) images[id] = await blobToDataUrl(blob)
         }
-        return new File([JSON.stringify(toMilaFile(items, images))], name, { type: 'application/json' })
+        // La copia de toda la galería lleva también la letra de Mila (resultados de todos sus tests), para
+        // recuperarla en otro dispositivo o si se borran los datos del navegador.
+        const hand = single ? undefined : loadProfile()
+        const withHand = hand && Object.keys(hand.samples).length ? hand : undefined
+        return new File([JSON.stringify(toMilaFile(items, images, withHand))], name, { type: 'application/json' })
       }
       try {
         const r = await saveFileAs(name, build, single ? items[0].score.title || 'Partitura MILA' : 'Partituras MILA')
@@ -450,15 +466,18 @@ export default function App() {
     async (files: File[]) => {
       try {
         const all: SavedScore[] = []
+        let handRestored = false
         for (const f of files) {
           const text = await f.text()
+          if (importProfile(parseMilaHand(text))) handRestored = true
           all.push(...parseMilaFile(text))
           for (const [id, url] of Object.entries(parseMilaImages(text))) {
             if (!(await getImage(id).catch(() => undefined))) await putImage(id, await dataUrlToBlob(url))
           }
         }
         const n = await lib.importItems(all)
-        showToast(n ? `${n} partitura${n === 1 ? '' : 's'} añadida${n === 1 ? '' : 's'} a la galería` : 'Ya tenías esas partituras')
+        const msg = n ? `${n} partitura${n === 1 ? '' : 's'} añadida${n === 1 ? '' : 's'} a la galería` : 'Ya tenías esas partituras'
+        showToast(handRestored ? `${msg} · y tu letra del test de escritura` : msg)
       } catch (e) {
         showToast(e instanceof Error ? e.message : 'No se pudo abrir el archivo', 'warn')
       }

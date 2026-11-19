@@ -17,6 +17,8 @@ export interface MilaFile {
   scores: SavedScore[]
   /** Imágenes de fondo (escaneos) como data-URL, por id. */
   images?: Record<string, string>
+  /** Letra de Mila (muestras del test de escritura), solo en la copia de toda la galería. */
+  hand?: unknown
 }
 
 export const FOLDER_NAME = 'Mila_partituras'
@@ -36,8 +38,24 @@ export function usedMeasures(s: Score): number {
 
 // ---- Archivos .mila.json ---------------------------------------------------
 
-export function toMilaFile(scores: SavedScore[], images?: Record<string, string>): MilaFile {
-  return { app: 'MILA', version: 1, exportedAt: Date.now(), scores, ...(images && Object.keys(images).length ? { images } : {}) }
+export function toMilaFile(scores: SavedScore[], images?: Record<string, string>, hand?: unknown): MilaFile {
+  return {
+    app: 'MILA',
+    version: 1,
+    exportedAt: Date.now(),
+    scores,
+    ...(images && Object.keys(images).length ? { images } : {}),
+    ...(hand ? { hand } : {}),
+  }
+}
+
+/** Letra de Mila incluida en un archivo .mila.json (o null). */
+export function parseMilaHand(text: string): unknown {
+  try {
+    return (JSON.parse(text) as Partial<MilaFile>).hand ?? null
+  } catch {
+    return null
+  }
 }
 
 /** Ids de las imágenes de fondo que usan estas partituras. */
@@ -104,15 +122,18 @@ export function fileSlug(title: string): string {
 const DB_NAME = 'mila'
 const STORE = 'scores'
 const IMAGES = 'images'
+/** Datos sueltos de la app (p.ej. la letra de Mila del test), con la misma protección que las partituras. */
+const KV = 'kv'
 let dbPromise: Promise<IDBDatabase> | null = null
 
 function db(): Promise<IDBDatabase> {
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, 2)
+      const req = indexedDB.open(DB_NAME, 3)
       req.onupgradeneeded = () => {
         if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE, { keyPath: 'id' })
         if (!req.result.objectStoreNames.contains(IMAGES)) req.result.createObjectStore(IMAGES)
+        if (!req.result.objectStoreNames.contains(KV)) req.result.createObjectStore(KV)
       }
       req.onsuccess = () => resolve(req.result)
       req.onerror = () => {
@@ -177,6 +198,15 @@ export async function putMany(items: SavedScore[]): Promise<void> {
 
 export async function deleteScore(id: string): Promise<void> {
   await run('readwrite', (s) => s.delete(id))
+}
+
+export async function kvGet<T>(key: string): Promise<T | undefined> {
+  return run<T | undefined>('readonly', (s) => s.get(key), KV)
+}
+
+export async function kvSet(key: string, value: unknown): Promise<void> {
+  askPersist()
+  await run('readwrite', (s) => s.put(value, key), KV)
 }
 
 // ---- Imágenes de fondo (escaneos) -------------------------------------------
