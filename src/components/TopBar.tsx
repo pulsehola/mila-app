@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { CircleHelp, FolderDown, Hand, LayoutGrid, Maximize2, Mic, Moon, Redo2, Share2, SlidersHorizontal, Sun, Undo2 } from 'lucide-react'
+import { CircleHelp, FolderDown, Hand, LayoutGrid, Maximize2, Mic, Moon, Redo2, Share2, SlidersHorizontal, Sun, Undo2, ArrowUpDown } from 'lucide-react'
 import type { Meter, Transposition } from '../types'
 import { METERS } from '../state/music'
 import { Logo, Wordmark } from './Logo'
@@ -33,6 +33,8 @@ interface Props {
   onFocus: () => void
   /** Clave, armadura y sonido. */
   onSettings: () => void
+  /** Transportar (crea una copia). */
+  onTranspose: () => void
 }
 
 export function TopBar(p: Props) {
@@ -128,6 +130,9 @@ export function TopBar(p: Props) {
         </IconButton>
         <IconButton label="Clave, armadura y sonido" onClick={p.onSettings} size={44}>
           <SlidersHorizontal size={20} />
+        </IconButton>
+        <IconButton label="Transportar (crea una copia)" onClick={p.onTranspose} size={44}>
+          <ArrowUpDown size={20} />
         </IconButton>
         <IconButton label="Afinador" onClick={p.onTuner} size={44}>
           <Mic size={20} />

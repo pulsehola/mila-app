@@ -14,7 +14,8 @@ import {
   Voice,
 } from 'vexflow'
 import type { Clef, Measure, Meter, Score } from '../types'
-import { clampKey, clefShift, keyVexName, TUPLET_NORMAL, vexKey } from '../state/music'
+import { clampKey, clefShift, effectiveAccidental, keyVexName, TUPLET_NORMAL, vexKey, writtenMidi } from '../state/music'
+import { fingeringFor, rangeState, valvesText } from '../state/trumpet'
 
 export const ROW_H = 160
 export const TOP_PAD = 54
@@ -80,6 +81,10 @@ export interface RenderOptions {
   key?: number
   /** Si se da, se escribe la indicación de tempo (♩ = bpm) sobre el primer compás. */
   bpm?: number
+  /** Trompeta: escribe la digitación (pistones) encima de cada nota. Solo en clave de Sol. */
+  fingerings?: boolean
+  /** Trompeta: colorea las notas fuera del registro (en clave de Sol). */
+  rangeWarnings?: boolean
 }
 
 /** Opciones de dibujo que salen de la propia partitura (métrica, clave, armadura y tempo). */
@@ -164,7 +169,12 @@ export function renderScore(container: HTMLElement, measures: Measure[], opts: R
       layout.measures.push(box)
 
       const m = measures[mi]
-      if (m.length > 0) drawNotes(ctx, stave, m, mi, layout, opts.meter ?? '4/4', clef)
+      if (m.length > 0)
+        drawNotes(ctx, stave, m, mi, layout, opts.meter ?? '4/4', clef, {
+          key,
+          fingerings: !!opts.fingerings && clef === 'treble',
+          rangeWarnings: !!opts.rangeWarnings && clef === 'treble',
+        })
       x += w
     }
     layout.rows.push({ yTop: rowTop, yBottom: rowBottom })
@@ -180,9 +190,10 @@ function drawNotes(
   layout: Layout,
   meter: Meter,
   clef: Clef,
+  trumpet: { key: number; fingerings: boolean; rangeWarnings: boolean },
 ): void {
   const shift = clefShift(clef)
-  const vfNotes = m.map((n) => {
+  const vfNotes = m.map((n, index) => {
     const isRest = n.kind === 'rest'
     // Plica hacia abajo desde la línea central (Si4 en Sol, Re3 en Fa).
     const stemUp = n.step - shift < 6
@@ -200,6 +211,19 @@ function drawNotes(
       const pos = stemUp ? Modifier.Position.BELOW : Modifier.Position.ABOVE
       if (n.staccato) note.addModifier(new Articulation('a.').setPosition(pos), 0)
       if (n.accent) note.addModifier(new Articulation('a>').setPosition(pos), 0)
+    }
+    if (!isRest && (trumpet.fingerings || trumpet.rangeWarnings)) {
+      const written = writtenMidi(n.step, effectiveAccidental(m, index, trumpet.key))
+      if (trumpet.rangeWarnings && rangeState(written) !== 'ok') {
+        note.setStyle({ fillStyle: '#e5484d', strokeStyle: '#e5484d' })
+      }
+      const f = trumpet.fingerings ? fingeringFor(written) : null
+      if (f) {
+        note.addModifier(
+          new VfAnnotation(valvesText(f.valves)).setFont('Plus Jakarta Sans, sans-serif', 10, 'bold').setVerticalJustification(VfAnnotation.VerticalJustify.TOP),
+          0,
+        )
+      }
     }
     if (n.dyn) {
       note.addModifier(

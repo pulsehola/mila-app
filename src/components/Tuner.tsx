@@ -3,6 +3,8 @@ import { Mic, MicOff } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { detectPitch, noteLabel, readingFromFreq } from '../audio/pitch'
 import { midiName, midiOctave } from '../state/music'
+import { fingeringFor } from '../state/trumpet'
+import { FingeringView } from './Valves'
 import type { Transposition } from '../types'
 import { IconButton, Modal } from './ui'
 import { ELASTIC } from './springs'
@@ -163,6 +165,11 @@ export function Tuner({ open, onClose, transposition }: Props) {
                   : ''}
           </div>
           {transposition === 'Bb' && <div className="text-[11px] text-muted">Se muestra la nota que lees (trompeta en Sib)</div>}
+          {written !== null && fingeringFor(written) && (
+            <div className="mt-2 flex justify-center text-ink">
+              <FingeringView f={fingeringFor(written)!} size={18} />
+            </div>
+          )}
         </motion.div>
 
         {state === 'error' && <div className="rounded-2xl bg-bad/15 p-3 text-center text-sm font-semibold text-bad">{error}</div>}

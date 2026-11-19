@@ -7,6 +7,11 @@ interface Props {
   onClose: () => void
   score: Score
   onChange: (p: Partial<Pick<Score, 'clef' | 'key' | 'sound'>>) => void
+  /** Preferencias de vista (de este iPad, no de la partitura). */
+  fingerings: boolean
+  onFingerings: (v: boolean) => void
+  rangeWarnings: boolean
+  onRangeWarnings: (v: boolean) => void
 }
 
 const KEYS = Array.from({ length: 15 }, (_, i) => i - 7)
@@ -44,7 +49,7 @@ function Segmented<T extends string>({
 }
 
 /** Ajustes de la partitura: clave, armadura y sonido de la reproducción. */
-export function ScoreSettings({ open, onClose, score, onChange }: Props) {
+export function ScoreSettings({ open, onClose, score, onChange, fingerings, onFingerings, rangeWarnings, onRangeWarnings }: Props) {
   const key = clampKey(score.key)
   const bb = score.transposition === 'Bb'
   const concert = concertKey(key, score.transposition)
@@ -112,6 +117,19 @@ export function ScoreSettings({ open, onClose, score, onChange }: Props) {
             onChange={(sound) => onChange({ sound })}
           />
           <p className="text-xs text-muted">Los dos sonidos son sintetizados en el iPad (funcionan sin conexión).</p>
+        </section>
+
+        <section className="flex flex-col gap-2">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-muted">Trompeta (en pantalla)</h3>
+          <label className="flex cursor-pointer items-center gap-3 text-sm font-semibold">
+            <input type="checkbox" checked={fingerings} onChange={(e) => onFingerings(e.target.checked)} className="h-5 w-5 accent-[var(--mint)]" />
+            Digitaciones encima de cada nota (pistones 1 2 3, 0 = al aire)
+          </label>
+          <label className="flex cursor-pointer items-center gap-3 text-sm font-semibold">
+            <input type="checkbox" checked={rangeWarnings} onChange={(e) => onRangeWarnings(e.target.checked)} className="h-5 w-5 accent-[var(--mint)]" />
+            Marcar en rojo las notas fuera del registro (más graves que Fa#3 o más agudas que Do6)
+          </label>
+          <p className="text-xs text-muted">Por nota escrita, en clave de Sol. Son de este iPad: no cambian la partitura ni el PDF.</p>
         </section>
       </div>
     </Modal>

@@ -4,6 +4,9 @@ import { forwardRef, useImperativeHandle } from 'react'
 import { IconButton } from './ui'
 import { ELASTIC } from './springs'
 
+const SUB_GLYPH = { 1: '♩', 2: '♫', 3: '3', 4: '♬' } as const
+const SUB_LABEL = { 1: 'pulsos', 2: 'corcheas', 3: 'tresillos', 4: 'semicorch.' } as const
+
 export interface TransportHandle {
   pulse: () => void
 }
@@ -19,6 +22,9 @@ interface Props {
   onBpm: (bpm: number) => void
   onTap: () => void
   onMetronome: () => void
+  /** Subdivisión del metrónomo (1 = solo pulsos). */
+  subdivision: 1 | 2 | 3 | 4
+  onSubdivision: () => void
   onLoop: () => void
 }
 
@@ -99,6 +105,21 @@ export const TransportBar = forwardRef<TransportHandle, Props>(function Transpor
         <IconButton label="Metrónomo" active={p.metronome} onClick={p.onMetronome} tone="mint" size={52}>
           <MetronomeIcon size={24} />
         </IconButton>
+        <div className="flex flex-col items-center">
+          <motion.button
+            type="button"
+            aria-label={`Subdivisión del metrónomo: ${SUB_LABEL[p.subdivision]}. Toca para cambiar`}
+            title="Subdivisión del metrónomo"
+            onClick={p.onSubdivision}
+            whileTap={{ scale: 0.88 }}
+            transition={ELASTIC}
+            className="grid h-[52px] min-w-[52px] place-items-center rounded-full border border-line px-2 text-lg font-black"
+            style={{ background: p.subdivision > 1 ? 'var(--mint)' : 'var(--panel)', color: p.subdivision > 1 ? '#12352c' : 'var(--ink)' }}
+          >
+            {SUB_GLYPH[p.subdivision]}
+          </motion.button>
+          <span className="mt-0.5 text-[10px] font-bold text-muted">{SUB_LABEL[p.subdivision]}</span>
+        </div>
         <div className="flex flex-col items-center">
           <IconButton label="Bucle" active={p.loop} onClick={p.onLoop} tone="sun" size={52}>
             <Repeat size={24} />

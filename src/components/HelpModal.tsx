@@ -171,6 +171,20 @@ export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onC
             compás.
           </li>
           <li>
+            <b>Trompeta</b>: al tocar una nota, la barra de abajo muestra su <b>digitación</b> (pistones 1 2 3; ● pulsado) y
+            alternativas. En Clave, armadura y sonido puedes ver las digitaciones encima de todas las notas y marcar en rojo
+            las que salen del registro (más graves que Fa#3 o más agudas que Do6). El afinador también enseña la digitación
+            de la nota que lees.
+          </li>
+          <li>
+            <b>Transportar</b> (flechas arriba y abajo): sube o baja por semitonos u octavas con vista previa, o pásala
+            <b> a altura real</b> (como suena la trompeta en Sib). Siempre crea una copia: tu partitura no cambia.
+          </li>
+          <li>
+            <b>Subdivisión del metrónomo</b> (botón junto al metrónomo): pulsos, corcheas, tresillos o semicorcheas, con un clic
+            más suave entre pulso y pulso.
+          </li>
+          <li>
             <b>Pantalla de escritura</b> (botón de las flechas hacia fuera, arriba, o <kbd>F</kbd>): oculta las barras y la
             paleta para escribir con todo el iPad, sobre todo en horizontal. Arriba a la derecha quedan deshacer, escuchar
             y el botón para volver. Mientras suena la partitura la pantalla no se apaga.

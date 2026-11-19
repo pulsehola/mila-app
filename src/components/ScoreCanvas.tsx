@@ -82,6 +82,9 @@ interface Props {
   keySig: number
   /** Tempo para la indicación ♩ = bpm (no se dibuja sobre una partitura escaneada). */
   bpm: number
+  /** Trompeta: digitaciones encima de las notas y notas fuera de registro en rojo. */
+  fingerings: boolean
+  rangeWarnings: boolean
   /** Zoom de Mila (pellizco): 1 = hoja ajustada al ancho. */
   userZoom: number
   onUserZoom: (z: number) => void
@@ -156,8 +159,8 @@ export function ScoreCanvas(p: Props) {
       host,
       p.measures,
       bg
-        ? { meter: p.meter, clef: p.clef, key: p.keySig, width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH, rowWidths: bg.rowWidths }
-        : { meter: p.meter, clef: p.clef, key: p.keySig, bpm: p.bpm, width },
+        ? { meter: p.meter, clef: p.clef, key: p.keySig, fingerings: p.fingerings, rangeWarnings: p.rangeWarnings, width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH, rowWidths: bg.rowWidths }
+        : { meter: p.meter, clef: p.clef, key: p.keySig, bpm: p.bpm, fingerings: p.fingerings, rangeWarnings: p.rangeWarnings, width },
     )
     layoutRef.current = l
     if (import.meta.env.DEV) (window as unknown as { __milaLayout?: Layout }).__milaLayout = l
@@ -183,7 +186,7 @@ export function ScoreCanvas(p: Props) {
       })
       if (fresh.length) setBursts((b) => [...b, ...fresh])
     }
-  }, [p.measures, width, bg?.layoutWidth, bg?.perRow, bg?.rowH, bg?.rowWidths, p.clef, p.keySig, p.bpm, p.meter])
+  }, [p.measures, width, bg?.layoutWidth, bg?.perRow, bg?.rowH, bg?.rowWidths, p.clef, p.keySig, p.bpm, p.meter, p.fingerings, p.rangeWarnings])
 
   // ---- Canvas de tinta ----------------------------------------------------
   /** Tinta aún sin convertir; `measure` = compás donde se escribió (-1 fuera de los pentagramas). */

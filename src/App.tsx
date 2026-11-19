@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { ImageIcon, Minimize2, Minus, Pause, Play, Plus, Redo2, RefreshCw, Trash2, Undo2, ZoomIn, ZoomOut } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createTapTempo, engine } from './audio/engine'
+import { createTapTempo, engine, type Subdivision } from './audio/engine'
 import { ArticulationPalette } from './components/ArticulationPalette'
 import { Calibration } from './components/Calibration'
 import { importProfile, loadProfile, restoreProfile } from './recognition/profile'
@@ -27,6 +27,9 @@ import { useScore } from './state/useScore'
 import type { Background, Duration, Dynamic, EditMode, LoopRange, Measure, Meter, Note, Score, Transposition, TupletKind } from './types'
 import { NoteTools } from './components/NoteTools'
 import { ScoreSettings } from './components/ScoreSettings'
+import { TransposeModal } from './components/TransposeModal'
+import { fingeringFor, rangeState } from './state/trumpet'
+import { transposedCopy } from './state/transpose'
 import { fileSlug, parseMilaFile, type SavedScore, toMilaFile } from './state/library'
 import { useLibrary } from './state/useLibrary'
 import { saveFileAs } from './export/share'
@@ -42,7 +45,7 @@ import { useUpdateReady, useWakeLock } from './state/pwa'
 import { IconButton } from './components/ui'
 import { TOP_PAD } from './notation/renderScore'
 
-type Modal = 'tuner' | 'export' | 'help' | 'clear' | 'gallery' | 'scan' | 'settings' | null
+type Modal = 'tuner' | 'export' | 'help' | 'clear' | 'gallery' | 'scan' | 'settings' | 'transpose' | null
 
 const NO_ANNOTATIONS: never[] = []
 
@@ -56,6 +59,22 @@ function measuresToCover(bg: Background): number {
   let n = 0
   for (let r = 0; r < rows; r++) n += bg.rowWidths?.[r]?.length ?? bg.perRow
   return Math.min(64, n)
+}
+
+function readPref(k: string, dflt: boolean): boolean {
+  try {
+    const v = localStorage.getItem(k)
+    return v === null ? dflt : v === '1'
+  } catch {
+    return dflt
+  }
+}
+function writePref(k: string, v: boolean): void {
+  try {
+    localStorage.setItem(k, v ? '1' : '0')
+  } catch {
+    /* sin almacenamiento */
+  }
 }
 
 export default function App() {
@@ -74,6 +93,23 @@ export default function App() {
   const [metroOnly, setMetroOnly] = useState(false)
   const [cursorId, setCursorId] = useState<string | null>(null)
   const [metro, setMetro] = useState(false)
+  /** Subdivisión del metrónomo (preferencia del dispositivo, no de la partitura). */
+  const [subdivision, setSubdivision] = useState<Subdivision>(() => {
+    try {
+      const v = Number(localStorage.getItem('mila:subdiv'))
+      return v === 2 || v === 3 || v === 4 ? v : 1
+    } catch {
+      return 1
+    }
+  })
+  useEffect(() => {
+    engine.setSubdivision(subdivision)
+    try {
+      localStorage.setItem('mila:subdiv', String(subdivision))
+    } catch {
+      /* sin almacenamiento */
+    }
+  }, [subdivision])
   const [loopOn, setLoopOn] = useState(false)
   const [loopRange, setLoopRange] = useState<LoopRange | null>(null)
   const [modal, setModal] = useState<Modal>(null)
@@ -94,6 +130,11 @@ export default function App() {
     }
   }, [focus])
   const updateReady = useUpdateReady()
+  /** Trompeta: digitaciones y avisos de registro (preferencias de este iPad). */
+  const [fingerings, setFingerings] = useState(() => readPref('mila:fingerings', false))
+  const [rangeWarnings, setRangeWarnings] = useState(() => readPref('mila:range', true))
+  useEffect(() => writePref('mila:fingerings', fingerings), [fingerings])
+  useEffect(() => writePref('mila:range', rangeWarnings), [rangeWarnings])
   const [adjustBg, setAdjustBg] = useState(false)
   const [userZoom, setUserZoom] = useState(1)
   const zoomBy = useCallback((k: number) => setUserZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(z * k * 100) / 100))), [])
@@ -381,6 +422,12 @@ export default function App() {
     if (r.firstId) setSelectedId(r.firstId)
     showToast(`Pegado en el compás ${r.index + 1}`)
   }, [clip, selected, api, stopPlayback, showToast])
+
+  /** Altura escrita de la nota seleccionada (solo trompeta en clave de Sol). */
+  const selectedWritten = useMemo(() => {
+    if (!selected || selected.note.kind !== 'note' || clef !== 'treble') return null
+    return writtenMidi(selected.note.step, effectiveAccidental(score.measures[selected.mi], selected.idx, keySig))
+  }, [selected, clef, score.measures, keySig])
 
   const moveSelection = useCallback(
     (d: number) => {
@@ -809,6 +856,7 @@ export default function App() {
         }}
         onFocus={() => setFocus(true)}
         onSettings={() => setModal('settings')}
+        onTranspose={() => setModal('transpose')}
       />
       )}
 
@@ -877,6 +925,8 @@ export default function App() {
                   canPaste={!!clip}
                   onCopy={copyMeasure}
                   onPaste={pasteMeasure}
+                  fingering={selectedWritten !== null ? fingeringFor(selectedWritten) : null}
+                  range={selectedWritten !== null ? rangeState(selectedWritten) : null}
                 />
               )}
             </AnimatePresence>
@@ -906,6 +956,8 @@ export default function App() {
             clef={clef}
             keySig={keySig}
             bpm={score.bpm}
+            fingerings={fingerings}
+            rangeWarnings={rangeWarnings}
             userZoom={userZoom}
             onUserZoom={setUserZoom}
           />
@@ -1009,11 +1061,33 @@ export default function App() {
         onBpm={setBpm}
         onTap={onTap}
         onMetronome={() => void toggleMetro()}
+        subdivision={subdivision}
+        onSubdivision={() => setSubdivision((s) => ((s % 4) + 1) as Subdivision)}
         onLoop={() => setLoopOn((v) => !v)}
       />
       )}
 
-      <ScoreSettings open={modal === 'settings'} onClose={() => setModal(null)} score={score} onChange={(p) => api.patch(p)} />
+      <ScoreSettings
+        open={modal === 'settings'}
+        onClose={() => setModal(null)}
+        score={score}
+        onChange={(p) => api.patch(p)}
+        fingerings={fingerings}
+        onFingerings={setFingerings}
+        rangeWarnings={rangeWarnings}
+        onRangeWarnings={setRangeWarnings}
+      />
+      <TransposeModal
+        open={modal === 'transpose'}
+        onClose={() => setModal(null)}
+        score={score}
+        onCreate={(semis, transposition) => {
+          const base = score.title || 'Sin título'
+          const tag = transposition !== score.transposition && transposition === 'C' ? 'altura real' : `${semis > 0 ? '+' : ''}${semis} st`
+          const copy = { ...transposedCopy(score, semis, `${base} (${tag})`), transposition }
+          void startScore(copy, 'Copia transportada creada · la original sigue en Mis partituras')
+        }}
+      />
       <Tuner open={modal === 'tuner'} onClose={() => setModal(null)} transposition={score.transposition} />
       <ExportModal open={modal === 'export'} onClose={() => setModal(null)} score={score} onToast={showToast} />
       <HelpModal

@@ -3,6 +3,9 @@ import { ClipboardPaste, Copy } from 'lucide-react'
 import type { Duration, Dynamic, Note } from '../types'
 import { DUR_LABEL, DYNAMIC_LABEL, DYNAMICS } from '../state/music'
 import { ELASTIC } from './springs'
+import type { Fingering, RangeState } from '../state/trumpet'
+import { RANGE_TEXT } from '../state/trumpet'
+import { FingeringView } from './Valves'
 
 const DURS: Duration[] = ['w', 'h', 'q', '8', '16']
 
@@ -38,13 +41,16 @@ interface Props {
   canPaste: boolean
   onCopy: () => void
   onPaste: () => void
+  /** Trompeta (clave de Sol): digitación y registro de la nota escrita. */
+  fingering?: Fingering | null
+  range?: RangeState | null
 }
 
 /**
  * Barra de la nota seleccionada: cambiar la figura (también de un silencio), poner un matiz y copiar/pegar
  * el compás. Aparece abajo, encima de Notas/Anotar/Goma, al tocar una nota.
  */
-export function NoteTools({ note, onDur, onDyn, canCopy, canPaste, onCopy, onPaste }: Props) {
+export function NoteTools({ note, onDur, onDyn, canCopy, canPaste, onCopy, onPaste, fingering, range }: Props) {
   const btn = 'grid h-11 min-w-11 place-items-center rounded-xl px-1.5 text-sm font-extrabold'
   return (
     <motion.div
@@ -122,6 +128,17 @@ export function NoteTools({ note, onDur, onDyn, canCopy, canPaste, onCopy, onPas
           <ClipboardPaste size={17} /> <span className="hidden sm:inline">Pegar</span>
         </span>
       </button>
+      {note?.kind === 'note' && (fingering || (range && range !== 'ok')) && (
+        <>
+          <div className="mx-0.5 h-8 w-px bg-line" />
+          <div className="flex items-center gap-2 px-1.5">
+            {fingering && <FingeringView f={fingering} />}
+            {range && range !== 'ok' && (
+              <span className="max-w-[180px] text-[11px] font-bold leading-tight text-bad">{RANGE_TEXT[range]}</span>
+            )}
+          </div>
+        </>
+      )}
     </motion.div>
   )
 }

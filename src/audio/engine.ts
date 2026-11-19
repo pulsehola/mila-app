@@ -4,6 +4,9 @@ import type { Meter, Sound } from '../types'
 
 const PPQ = 192 // ticks por negra en Tone.Transport
 const TICKS_PER_UNIT = PPQ / 4 // 1 unidad = semicorchea
+/** Golpes de rejilla por pulso (múltiplo de 2, 3 y 4). */
+const SUB_GRID = 12
+export type Subdivision = 1 | 2 | 3 | 4
 
 export interface PlayOptions {
   events: PlayEvent[]
@@ -134,6 +137,35 @@ export class AudioEngine {
     this.metronomeOn = on
   }
 
+  /** Subdivisión del metrónomo: 1 = solo pulsos, 2 = corcheas, 3 = tresillos, 4 = semicorcheas. */
+  private subdivision: Subdivision = 1
+  setSubdivision(n: Subdivision): void {
+    // Se lee en cada golpe: el cambio se oye al momento, sin reiniciar.
+    this.subdivision = n
+  }
+
+  /**
+   * Pulsos + subdivisiones: una rejilla de 12 golpes por pulso (sirve para 2, 3 y 4); en el golpe 0 suena el
+   * pulso normal y en los de la subdivisión elegida, un clic más suave.
+   */
+  private scheduleClicks(tr: ReturnType<typeof Tone.getTransport>): void {
+    const beatTicks = this.beatNote === '8n' ? PPQ / 2 : PPQ
+    let k = 0
+    tr.scheduleRepeat(
+      (time) => {
+        const pos = k % SUB_GRID
+        k += 1
+        if (pos === 0) return this.tickBeat(time)
+        const n = this.subdivision
+        if (this.metronomeOn && n > 1 && pos % (SUB_GRID / n) === 0) {
+          this.click.triggerAttackRelease('B4', '64n', time, 0.28)
+        }
+      },
+      `${beatTicks / SUB_GRID}i`,
+      0,
+    )
+  }
+
   get isPlaying(): boolean {
     return this.scoreActive
   }
@@ -145,7 +177,7 @@ export class AudioEngine {
     const tr = Tone.getTransport()
     tr.bpm.value = bpm
     this.beatCounter = 0
-    tr.scheduleRepeat((time) => this.tickBeat(time), this.beatNote, 0)
+    this.scheduleClicks(tr)
     tr.start('+0.05')
   }
 
@@ -173,7 +205,7 @@ export class AudioEngine {
       }, `${ticks}i`)
     }
 
-    tr.scheduleRepeat((time) => this.tickBeat(time), this.beatNote, 0)
+    this.scheduleClicks(tr)
 
     const endTicks = opts.totalUnits * TICKS_PER_UNIT
     if (opts.loop) {
