@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Annotation, Background, Measure, Score } from '../types'
 import { emptyScore } from './examples'
 import { isMeter, measureCapacity, measureUnits } from './music'
+import { useOnHide } from './pwa'
 
 const KEY = 'mila:v1'
 const MAX_MEASURES = 64
@@ -150,6 +151,15 @@ export function useScore(): ScoreApi {
     }, 250)
     return () => window.clearTimeout(id)
   }, [score])
+
+  // Al cerrar MILA o cambiar de app: se guarda ya, sin esperar al retraso del autoguardado.
+  useOnHide(() => {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(scoreRef.current))
+    } catch {
+      /* cuota o modo privado */
+    }
+  })
 
   const setMeasures = useCallback((fn: (m: Measure[]) => Measure[], record = true) => {
     const prev = scoreRef.current.measures

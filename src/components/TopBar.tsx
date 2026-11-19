@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { CircleHelp, FolderDown, Hand, LayoutGrid, Mic, Moon, Redo2, Share2, Sun, Undo2 } from 'lucide-react'
+import { CircleHelp, FolderDown, Hand, LayoutGrid, Maximize2, Mic, Moon, Redo2, Share2, Sun, Undo2 } from 'lucide-react'
 import type { Meter, Transposition } from '../types'
 import { METERS } from '../state/music'
 import { Logo, Wordmark } from './Logo'
@@ -29,6 +29,8 @@ interface Props {
   onGallery: () => void
   fingerDraw: boolean
   onFinger: () => void
+  /** Pantalla de escritura: oculta barras y paleta. */
+  onFocus: () => void
 }
 
 export function TopBar(p: Props) {
@@ -127,6 +129,9 @@ export function TopBar(p: Props) {
         </IconButton>
         <IconButton label="Dibujar también con el dedo" active={p.fingerDraw} onClick={p.onFinger} size={44}>
           <Hand size={20} />
+        </IconButton>
+        <IconButton label="Pantalla de escritura: ocultar barras (F)" onClick={p.onFocus} size={44}>
+          <Maximize2 size={20} />
         </IconButton>
         <IconButton label="Guía de trazos" onClick={p.onHelp} size={44}>
           <CircleHelp size={20} />

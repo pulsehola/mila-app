@@ -159,11 +159,16 @@ export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onC
             (es un borrador: revisa y corrige). Con <b>Fondo</b> puedes reajustar o «Detectar notas» otra vez. Al
             exportar sale tal cual se ve.
           </li>
+          <li>
+            <b>Pantalla de escritura</b> (botón de las flechas hacia fuera, arriba, o <kbd>F</kbd>): oculta las barras y la
+            paleta para escribir con todo el iPad, sobre todo en horizontal. Arriba a la derecha quedan deshacer, escuchar
+            y el botón para volver. Mientras suena la partitura la pantalla no se apaga.
+          </li>
           <li>El punto junto a cada compás avisa si faltan o sobran tiempos según la métrica.</li>
           <li>
             Mac: <kbd>Espacio</kbd> play/pausa · <kbd>⌘Z</kbd> deshacer · <kbd>⇧⌘Z</kbd> rehacer · <kbd>⌫</kbd> borra la nota · <kbd>↑ ↓</kbd> tono ·{' '}
             <kbd>← →</kbd> navegar · <kbd>#</kbd> <kbd>b</kbd> <kbd>n</kbd> alteraciones · <kbd>S</kbd> staccato · <kbd>A</kbd> acento · <kbd>L</kbd> ligadura ·{' '}
-            <kbd>M</kbd> Notas/Anotar · <kbd>G</kbd> goma
+            <kbd>M</kbd> Notas/Anotar · <kbd>G</kbd> goma · <kbd>F</kbd> pantalla de escritura
           </li>
         </ul>
       </div>

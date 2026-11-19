@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { ImageIcon, Minus, Plus, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
+import { ImageIcon, Minimize2, Minus, Pause, Play, Plus, Redo2, RefreshCw, Trash2, Undo2, ZoomIn, ZoomOut } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createTapTempo, engine } from './audio/engine'
 import { ArticulationPalette } from './components/ArticulationPalette'
@@ -35,6 +35,8 @@ import { digitize } from './scan/digitize'
 import { blobToDataUrl, dataUrlToBlob, deleteImage, getImage, imageIdsOf, parseMilaHand, parseMilaImages, putImage } from './state/library'
 import { newId } from './state/music'
 import { useImageUrl } from './state/useImageUrl'
+import { useUpdateReady, useWakeLock } from './state/pwa'
+import { IconButton } from './components/ui'
 import { TOP_PAD } from './notation/renderScore'
 
 type Modal = 'tuner' | 'export' | 'help' | 'clear' | 'gallery' | 'scan' | null
@@ -70,6 +72,22 @@ export default function App() {
   const [loopRange, setLoopRange] = useState<LoopRange | null>(null)
   const [modal, setModal] = useState<Modal>(null)
   const [fingerDraw, setFingerDraw] = useState(false)
+  /** Pantalla de escritura: se ocultan barras y paleta para escribir con todo el iPad (sobre todo en horizontal). */
+  const [focus, setFocus] = useState(() => {
+    try {
+      return localStorage.getItem('mila:focus') === '1'
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('mila:focus', focus ? '1' : '0')
+    } catch {
+      /* sin almacenamiento */
+    }
+  }, [focus])
+  const updateReady = useUpdateReady()
   const [adjustBg, setAdjustBg] = useState(false)
   const [userZoom, setUserZoom] = useState(1)
   const zoomBy = useCallback((k: number) => setUserZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(z * k * 100) / 100))), [])
@@ -127,6 +145,9 @@ export default function App() {
     for (let i = score.measures.length - 1; i >= 0; i--) if (score.measures[i].length) return i
     return 0
   }, [score.measures])
+
+  // Mientras suena la partitura o el metrónomo, el iPad no apaga la pantalla.
+  useWakeLock(playing || metroOnly)
 
   const startPlayback = useCallback(async () => {
     const range = loopOn && loopRange ? loopRange : { start: 0, end: lastUsed }
@@ -627,6 +648,7 @@ export default function App() {
     zoomIn: () => zoomBy(1.25),
     zoomOut: () => zoomBy(0.8),
     zoomReset: () => setUserZoom(1),
+    focus: () => setFocus((v) => !v),
   }
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -681,6 +703,8 @@ export default function App() {
           return run('erase')
         case 'Enter':
           return run('convert')
+        case 'f':
+          return run('focus')
       }
     }
     const up = (e: KeyboardEvent) => {
@@ -699,6 +723,7 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col bg-bg text-ink">
+      {!focus && (
       <TopBar
         title={score.title}
         onTitle={(title) => api.patch({ title })}
@@ -726,9 +751,12 @@ export default function App() {
           setFingerDraw((v) => !v)
           showToast(fingerDraw ? 'Solo Apple Pencil / ratón dibujan' : 'Ahora el dedo también dibuja')
         }}
+        onFocus={() => setFocus(true)}
       />
+      )}
 
       <div className="relative flex min-h-0 flex-1">
+        {!focus && (
         <ArticulationPalette
           note={selected?.note ?? null}
           canSlur={canSlur}
@@ -738,6 +766,7 @@ export default function App() {
           onTuplet={onTuplet}
           onDelete={deleteSelected}
         />
+        )}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <AnimatePresence>
             {loopOn && (
@@ -751,6 +780,33 @@ export default function App() {
               </motion.div>
             )}
           </AnimatePresence>
+          {focus && (
+            <div
+              className="pointer-events-none absolute right-4 top-3 z-40 flex items-center gap-1.5 rounded-full border border-line bg-panel/95 p-1 shadow backdrop-blur"
+              style={{ top: 'max(12px, env(safe-area-inset-top))', right: 'max(16px, env(safe-area-inset-right))' }}
+            >
+              <span className="pointer-events-auto">
+                <IconButton label="Deshacer (⌘Z)" onClick={api.undo} disabled={!api.canUndo} size={44}>
+                  <Undo2 size={20} />
+                </IconButton>
+              </span>
+              <span className="pointer-events-auto">
+                <IconButton label="Rehacer (⇧⌘Z)" onClick={api.redo} disabled={!api.canRedo} size={44}>
+                  <Redo2 size={20} />
+                </IconButton>
+              </span>
+              <span className="pointer-events-auto">
+                <IconButton label={playing ? 'Detener (espacio)' : 'Escuchar (espacio)'} onClick={togglePlay} tone="coral" active={playing} size={44}>
+                  {playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
+                </IconButton>
+              </span>
+              <span className="pointer-events-auto">
+                <IconButton label="Mostrar barras y paleta (F)" onClick={() => setFocus(false)} tone="sun" active size={44}>
+                  <Minimize2 size={20} />
+                </IconButton>
+              </span>
+            </div>
+          )}
           <ScoreCanvas
             measures={score.measures}
             transposition={score.transposition}
@@ -863,6 +919,7 @@ export default function App() {
         </div>
       </div>
 
+      {!focus && (
       <TransportBar
         ref={transportRef}
         playing={playing}
@@ -877,6 +934,7 @@ export default function App() {
         onMetronome={() => void toggleMetro()}
         onLoop={() => setLoopOn((v) => !v)}
       />
+      )}
 
       <Tuner open={modal === 'tuner'} onClose={() => setModal(null)} transposition={score.transposition} />
       <ExportModal open={modal === 'export'} onClose={() => setModal(null)} score={score} onToast={showToast} />
@@ -942,6 +1000,23 @@ export default function App() {
         </div>
       </UiModal>
       <Toast msg={toast?.msg ?? null} tone={toast?.tone ?? 'info'} />
+      <AnimatePresence>
+        {updateReady && (
+          <motion.button
+            type="button"
+            initial={{ opacity: 0, y: -16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -16 }}
+            whileTap={{ scale: 0.95 }}
+            transition={ELASTIC}
+            onClick={() => void lib.flush().finally(() => window.location.reload())}
+            className="fixed left-1/2 z-[70] flex h-11 -translate-x-1/2 items-center gap-2 rounded-full bg-mint px-4 text-sm font-extrabold text-[#12352c] shadow-lg"
+            style={{ top: 'max(12px, env(safe-area-inset-top))' }}
+          >
+            <RefreshCw size={16} /> Hay una versión nueva de MILA · Actualizar
+          </motion.button>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

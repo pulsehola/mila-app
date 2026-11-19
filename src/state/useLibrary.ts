@@ -10,6 +10,7 @@ import {
   type SavedScore,
   saveScore,
 } from './library'
+import { useOnHide } from './pwa'
 
 const CURRENT_KEY = 'mila:currentId'
 const SAVE_DELAY = 600
@@ -102,6 +103,9 @@ export function useLibrary(score: Score): LibraryApi {
     window.clearTimeout(timer.current)
     await save(latest.current.id, latest.current.score)
   }, [save])
+
+  // Al cerrar MILA o cambiar de app: la galería se guarda ya (el autoguardado espera 600 ms).
+  useOnHide(() => void flush())
 
   const openItem = useCallback(async (id: string) => {
     const item = await getScore(id)
