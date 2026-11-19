@@ -1,5 +1,5 @@
 import type { Score } from '../types'
-import { effectiveAccidental, letterOf, measureCapacity, meterParts, noteUnits, octaveOf, TUPLET_NORMAL } from '../state/music'
+import { clampKey, effectiveAccidental, letterOf, measureCapacity, meterParts, noteUnits, octaveOf, TUPLET_NORMAL } from '../state/music'
 
 /** Divisiones por negra: 120 admite puntillos y tresillos, quintillos y seisillos de semicorchea. */
 const DIV = 120
@@ -31,14 +31,16 @@ export function scoreToMusicXML(score: Score): string {
   out.push('  <part id="P1">')
   const meter = score.meter ?? '4/4'
   const { beats, beatType } = meterParts(meter)
+  const key = clampKey(score.key)
+  const bass = score.clef === 'bass'
   score.measures.forEach((m, mi) => {
     out.push(`    <measure number="${mi + 1}">`)
     if (mi === 0) {
       out.push('      <attributes>')
-      out.push('        <divisions>${DIV}</divisions>')
-      out.push('        <key><fifths>0</fifths></key>')
+      out.push(`        <divisions>${DIV}</divisions>`)
+      out.push(`        <key><fifths>${key}</fifths></key>`)
       out.push(`        <time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time>`)
-      out.push('        <clef><sign>G</sign><line>2</line></clef>')
+      out.push(bass ? '        <clef><sign>F</sign><line>4</line></clef>' : '        <clef><sign>G</sign><line>2</line></clef>')
       if (bb) out.push('        <transpose><diatonic>-1</diatonic><chromatic>-2</chromatic></transpose>')
       out.push('      </attributes>')
       out.push(`      <direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${score.bpm}</per-minute></metronome></direction-type><sound tempo="${score.bpm}"/></direction>`)
@@ -48,11 +50,14 @@ export function scoreToMusicXML(score: Score): string {
     }
     m.forEach((n, i) => {
       const next = m[i + 1]
+      if (n.dyn) {
+        out.push(`      <direction placement="below"><direction-type><dynamics><${n.dyn}/></dynamics></direction-type></direction>`)
+      }
       out.push('      <note>')
       if (n.kind === 'rest') {
         out.push('        <rest/>')
       } else {
-        const eff = effectiveAccidental(m, i)
+        const eff = effectiveAccidental(m, i, key)
         const alter = eff === '#' ? 1 : eff === 'b' ? -1 : 0
         out.push('        <pitch>')
         out.push(`          <step>${letterOf(n.step).toUpperCase()}</step>`)

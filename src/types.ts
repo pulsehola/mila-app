@@ -4,6 +4,12 @@ export type Accidental = '' | '#' | 'b' | 'n'
 export type Transposition = 'Bb' | 'C'
 /** Compás (métrica) de toda la partitura. */
 export type Meter = '2/4' | '3/4' | '4/4' | '6/8'
+/** Clave: de Sol (trompeta) o de Fa. */
+export type Clef = 'treble' | 'bass'
+/** Matices dinámicos (se mantienen hasta el siguiente). */
+export type Dynamic = 'pp' | 'p' | 'mp' | 'mf' | 'f' | 'ff'
+/** Sonido de la reproducción (ambos sintetizados en el navegador). */
+export type Sound = 'trumpet' | 'piano'
 
 export interface Note {
   id: string
@@ -24,6 +30,8 @@ export interface Note {
    * 3 = tresillo (3 en el tiempo de 2), 5 = quintillo y 6 = seisillo (5 o 6 en el tiempo de 4).
    */
   tuplet?: Tuplet
+  /** Matiz que empieza en esta nota (pp … ff). */
+  dyn?: Dynamic
 }
 
 export type TupletKind = 3 | 5 | 6
@@ -87,6 +95,15 @@ export interface Score {
   transposition: Transposition
   /** Métrica; si falta, 4/4 (partituras guardadas antes de existir esta opción). */
   meter?: Meter
+  /** Clave; si falta, de Sol. */
+  clef?: Clef
+  /**
+   * Armadura ESCRITA en quintas (−7 = 7 bemoles … 0 = sin alteraciones … 7 = 7 sostenidos).
+   * Como las notas, es lo que lee el trompetista; en Sib suena una 2ª mayor más grave (2 bemoles más).
+   */
+  key?: number
+  /** Sonido al reproducir; si falta, trompeta. */
+  sound?: Sound
   /** Capa vectorial superior de anotaciones libres. */
   annotations?: Annotation[]
   /** Partitura escaneada de fondo (opcional). */

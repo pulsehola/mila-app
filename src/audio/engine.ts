@@ -1,6 +1,6 @@
 import * as Tone from 'tone'
 import { DEFAULT_METER, meterParts, midiToFreq, type PlayEvent } from '../state/music'
-import type { Meter } from '../types'
+import type { Meter, Sound } from '../types'
 
 const PPQ = 192 // ticks por negra en Tone.Transport
 const TICKS_PER_UNIT = PPQ / 4 // 1 unidad = semicorchea
@@ -22,6 +22,9 @@ type Listener<T> = ((v: T) => void) | null
 export class AudioEngine {
   private ready = false
   private synth!: Tone.MonoSynth
+  /** Piano sintetizado (FM con caída natural, sin muestras: funciona sin conexión). */
+  private piano!: Tone.PolySynth<Tone.FMSynth>
+  private sound: Sound = 'trumpet'
   private click!: Tone.MembraneSynth
   private vibrato!: Tone.LFO
   private reverb!: Tone.Reverb
@@ -71,6 +74,16 @@ export class AudioEngine {
     }).connect(this.reverb)
 
     // Vibrato muy sutil, característico de una nota sostenida de trompeta.
+    this.piano = new Tone.PolySynth(Tone.FMSynth, {
+      harmonicity: 3,
+      modulationIndex: 6,
+      oscillator: { type: 'sine' },
+      envelope: { attack: 0.004, decay: 1.4, sustain: 0.06, release: 0.9 },
+      modulation: { type: 'sine' },
+      modulationEnvelope: { attack: 0.002, decay: 0.5, sustain: 0.1, release: 0.6 },
+      volume: -9,
+    }).connect(this.reverb)
+
     this.vibrato = new Tone.LFO({ frequency: 5.2, min: -6, max: 6 }).start()
     this.vibrato.connect(this.synth.detune)
 
@@ -89,7 +102,18 @@ export class AudioEngine {
   async preview(midi: number, ms = 280): Promise<void> {
     await this.init()
     const now = Tone.now()
-    this.synth.triggerAttackRelease(midiToFreq(midi), ms / 1000, now + 0.005, 0.8)
+    this.voice(midiToFreq(midi), ms / 1000, now + 0.005, 0.8)
+  }
+
+  /** Trompeta o piano (ambos sintetizados). */
+  setSound(sound: Sound): void {
+    if (this.ready && sound !== this.sound) this.synth.triggerRelease()
+    this.sound = sound
+  }
+
+  private voice(freq: number, dur: number, time: number, vel: number): void {
+    if (this.sound === 'piano') this.piano.triggerAttackRelease(freq, Math.max(dur, 0.25), time, vel)
+    else this.synth.triggerAttackRelease(freq, dur, time, vel)
   }
 
   setBpm(bpm: number): void {
@@ -144,8 +168,7 @@ export class AudioEngine {
         if (ev.staccato) dur *= 0.4
         else if (ev.slurToNext) dur *= 1.0
         else dur *= 0.93
-        const vel = ev.accent ? 1 : 0.72
-        this.synth.triggerAttackRelease(midiToFreq(ev.midi!), dur, time, vel)
+        this.voice(midiToFreq(ev.midi!), dur, time, ev.velocity)
         Tone.getDraw().schedule(() => this.onCursor?.({ noteId: ev.noteId, measure: ev.measure, index: ev.index }), time)
       }, `${ticks}i`)
     }
@@ -190,6 +213,7 @@ export class AudioEngine {
     tr.cancel(0)
     tr.loop = false
     this.synth.triggerRelease()
+    this.piano?.releaseAll()
     this.scoreActive = false
     this.onCursor?.(null)
     if (notify && wasActive) this.onStop?.()
@@ -203,6 +227,7 @@ export class AudioEngine {
     if (!this.ready) return
     this.stop(false)
     this.synth.dispose()
+    this.piano.dispose()
     this.click.dispose()
     this.vibrato.dispose()
     this.reverb.dispose()

@@ -1,4 +1,4 @@
-import type { Accidental, Duration, Measure, Meter, Note, Transposition, TupletKind } from '../types'
+import type { Accidental, Clef, Duration, Dynamic, Measure, Meter, Note, Transposition, TupletKind } from '../types'
 
 /** Unidades de semicorchea por compás 4/4. */
 export const MEASURE_UNITS = 16
@@ -42,8 +42,81 @@ export function newId(): string {
   return `n${Date.now().toString(36)}${counter.toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`
 }
 
-export function clampStep(step: number): number {
-  return Math.max(MIN_STEP, Math.min(MAX_STEP, step))
+/**
+ * Desplazamiento de clave: la misma línea del pentagrama está 12 pasos diatónicos más abajo en clave de Fa
+ * (línea inferior: Mi4 en clave de Sol, Sol2 en clave de Fa).
+ */
+export function clefShift(clef: Clef = 'treble'): number {
+  return clef === 'bass' ? -12 : 0
+}
+
+/** Limita el paso a lo que cabe en el pentagrama (con líneas adicionales), según la clave. */
+export function clampStep(step: number, clef: Clef = 'treble'): number {
+  const s = clefShift(clef)
+  return Math.max(MIN_STEP + s, Math.min(MAX_STEP + s, step))
+}
+
+// ---- Armaduras ---------------------------------------------------------------
+
+/** Orden de los sostenidos (F C G D A E B) y de los bemoles (B E A D G C F), como índices de LETTERS. */
+const SHARP_ORDER = [3, 0, 4, 1, 5, 2, 6]
+const FLAT_ORDER = [6, 2, 5, 1, 4, 0, 3]
+const MAJOR_BY_FIFTHS = ['Cb', 'Gb', 'Db', 'Ab', 'Eb', 'Bb', 'F', 'C', 'G', 'D', 'A', 'E', 'B', 'F#', 'C#']
+const ES: Record<string, string> = { C: 'Do', D: 'Re', E: 'Mi', F: 'Fa', G: 'Sol', A: 'La', B: 'Si' }
+
+export function clampKey(k: unknown): number {
+  return typeof k === 'number' && Number.isFinite(k) ? Math.max(-7, Math.min(7, Math.round(k))) : 0
+}
+/** Nombre de VexFlow de la armadura (tonalidad mayor): "D", "Bb"... */
+export function keyVexName(fifths: number): string {
+  return MAJOR_BY_FIFTHS[clampKey(fifths) + 7]
+}
+/** "Re mayor", "Si♭ mayor"... */
+export function keyLabel(fifths: number): string {
+  const n = keyVexName(fifths)
+  return `${ES[n[0]]}${n.slice(1).replace('#', '♯').replace('b', '♭')} mayor`
+}
+/** "2 sostenidos", "3 bemoles", "sin alteraciones". */
+export function keyCount(fifths: number): string {
+  const k = clampKey(fifths)
+  if (k === 0) return 'sin alteraciones'
+  const n = Math.abs(k)
+  return `${n} ${k > 0 ? (n === 1 ? 'sostenido' : 'sostenidos') : n === 1 ? 'bemol' : 'bemoles'}`
+}
+/**
+ * Armadura que SUENA: en Sib el instrumento suena una 2ª mayor más grave, que son 2 quintas menos
+ * (Re mayor escrito = Do mayor real). Si se pasa de 7 se usa la enarmónica más sencilla.
+ */
+export function concertKey(fifths: number, t: Transposition): number {
+  let k = clampKey(fifths) + (t === 'Bb' ? -2 : 0)
+  if (k < -7) k += 12
+  if (k > 7) k -= 12
+  return k
+}
+/** Alteración que la armadura da a un paso (si no hay alteración accidental). */
+export function keyAccidental(step: number, fifths = 0): Accidental {
+  const k = clampKey(fifths)
+  const letter = ((step % 7) + 7) % 7
+  if (k > 0 && SHARP_ORDER.slice(0, k).includes(letter)) return '#'
+  if (k < 0 && FLAT_ORDER.slice(0, -k).includes(letter)) return 'b'
+  return ''
+}
+
+// ---- Dinámicas -----------------------------------------------------------------
+
+export const DYNAMICS: Dynamic[] = ['pp', 'p', 'mp', 'mf', 'f', 'ff']
+export const DYNAMIC_LABEL: Record<Dynamic, string> = {
+  pp: 'Pianissimo (muy suave)',
+  p: 'Piano (suave)',
+  mp: 'Mezzo piano (medio suave)',
+  mf: 'Mezzo forte (medio fuerte)',
+  f: 'Forte (fuerte)',
+  ff: 'Fortissimo (muy fuerte)',
+}
+/** Intensidad de reproducción de cada matiz (0..1). Sin matiz se toca a mf. */
+export const DYNAMIC_VELOCITY: Record<Dynamic, number> = { pp: 0.32, p: 0.45, mp: 0.58, mf: 0.72, f: 0.86, ff: 1 }
+export function isDynamic(v: unknown): v is Dynamic {
+  return typeof v === 'string' && (DYNAMICS as string[]).includes(v)
 }
 
 export function letterOf(step: number): (typeof LETTERS)[number] {
@@ -124,7 +197,7 @@ export function describeDiff(diff: number, meter: Meter = DEFAULT_METER): string
  * Alteración efectiva de la nota `index` dentro de su compás:
  * una alteración escrita afecta a las notas siguientes del mismo paso hasta el final del compás.
  */
-export function effectiveAccidental(m: Measure, index: number): Accidental {
+export function effectiveAccidental(m: Measure, index: number, key = 0): Accidental {
   const n = m[index]
   if (!n || n.kind === 'rest') return ''
   if (n.acc) return n.acc
@@ -132,7 +205,8 @@ export function effectiveAccidental(m: Measure, index: number): Accidental {
     const p = m[i]
     if (p.kind === 'note' && p.step === n.step && p.acc) return p.acc
   }
-  return ''
+  // Sin alteración en el compás: manda la armadura.
+  return keyAccidental(n.step, key)
 }
 
 export function accidentalOffset(acc: Accidental): number {
@@ -178,6 +252,8 @@ export interface PlayEvent {
   staccato: boolean
   accent: boolean
   slurToNext: boolean
+  /** Intensidad 0..1 según el matiz vigente (y el acento). */
+  velocity: number
 }
 
 /** Convierte la partitura en eventos de reproducción (cada compás ocupa al menos su capacidad según la métrica). */
@@ -186,19 +262,24 @@ export function buildEvents(
   transposition: Transposition,
   range?: { start: number; end: number } | null,
   meter: Meter = DEFAULT_METER,
+  key = 0,
 ): { events: PlayEvent[]; totalUnits: number } {
   const capacity = measureCapacity(meter)
   const first = range ? Math.max(0, range.start) : 0
   const last = range ? Math.min(measures.length - 1, range.end) : measures.length - 1
   const events: PlayEvent[] = []
   let cursor = 0
+  // Matiz vigente al empezar (aunque el fragmento empiece a mitad de la obra).
+  let dyn: Dynamic = 'mf'
+  for (let mi = 0; mi < first; mi++) for (const n of measures[mi] ?? []) if (n.dyn) dyn = n.dyn
   for (let mi = first; mi <= last; mi++) {
     const m = measures[mi]
     let t = cursor
     m.forEach((n, index) => {
       const dur = noteUnits(n)
+      if (n.dyn) dyn = n.dyn
       if (n.kind === 'note') {
-        const acc = effectiveAccidental(m, index)
+        const acc = effectiveAccidental(m, index, key)
         events.push({
           noteId: n.id,
           measure: mi,
@@ -209,6 +290,7 @@ export function buildEvents(
           staccato: n.staccato,
           accent: n.accent,
           slurToNext: n.slur && index < m.length - 1 && m[index + 1].kind === 'note',
+          velocity: Math.min(1, DYNAMIC_VELOCITY[dyn] * (n.accent ? 1.25 : 1)),
         })
       }
       t += dur

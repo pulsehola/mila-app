@@ -1,5 +1,6 @@
 import {
   Accidental as VfAccidental,
+  Annotation as VfAnnotation,
   Articulation,
   Beam,
   Curve,
@@ -12,8 +13,8 @@ import {
   Tuplet as VfTuplet,
   Voice,
 } from 'vexflow'
-import type { Measure, Meter } from '../types'
-import { TUPLET_NORMAL, vexKey } from '../state/music'
+import type { Clef, Measure, Meter, Score } from '../types'
+import { clampKey, clefShift, keyVexName, TUPLET_NORMAL, vexKey } from '../state/music'
 
 export const ROW_H = 160
 export const TOP_PAD = 54
@@ -73,6 +74,23 @@ export interface RenderOptions {
    * encima del de papel. Los sistemas que no estén aquí usan `perRow` compases iguales.
    */
   rowWidths?: number[][]
+  /** Clave (de Sol por defecto). */
+  clef?: Clef
+  /** Armadura escrita en quintas (0 = sin alteraciones). */
+  key?: number
+  /** Si se da, se escribe la indicación de tempo (♩ = bpm) sobre el primer compás. */
+  bpm?: number
+}
+
+/** Opciones de dibujo que salen de la propia partitura (métrica, clave, armadura y tempo). */
+export function scoreRenderOpts(s: Pick<Score, 'meter' | 'clef' | 'key' | 'bpm'>): Pick<RenderOptions, 'meter' | 'clef' | 'key' | 'bpm'> {
+  return { meter: s.meter ?? '4/4', clef: s.clef ?? 'treble', key: clampKey(s.key), bpm: s.bpm }
+}
+
+/** Ancho extra de la armadura al principio de cada sistema. */
+function keyWidth(key: number): number {
+  const n = Math.abs(clampKey(key))
+  return n ? n * 10 + 10 : 0
 }
 
 export function computePerRow(width: number): number {
@@ -87,7 +105,9 @@ export function renderScore(container: HTMLElement, measures: Measure[], opts: R
   const firstIndex = opts.firstIndex ?? 0
   const showTime = opts.timeSig ?? firstIndex === 0
   const inner = width - SIDE_PAD * 2
-  const extras = CLEF_W + (showTime ? TIME_W : 0)
+  const clef = opts.clef ?? 'treble'
+  const key = clampKey(opts.key)
+  const extras = CLEF_W + keyWidth(key) + (showTime ? TIME_W : 0)
   const baseW = (inner - extras) / perRow
   // Reparto de compases en sistemas (con anchos del papel si los hay).
   const rowsSpec: number[][] = []
@@ -121,8 +141,10 @@ export function renderScore(container: HTMLElement, measures: Measure[], opts: R
       const first = c === 0
       const w = rowsSpec[row][c]
       const stave = new Stave(x, y, w)
-      if (first) stave.addClef('treble')
+      if (first) stave.addClef(clef)
+      if (first && key) stave.addKeySignature(keyVexName(key))
       if (first && row === 0 && showTime) stave.addTimeSignature(opts.meter ?? '4/4')
+      if (first && row === 0 && firstIndex === 0 && opts.bpm) stave.setTempo({ duration: 'q', bpm: opts.bpm }, 0)
       if (opts.measureNumbers) stave.setMeasure(firstIndex + mi + 1)
       stave.setContext(ctx).draw()
       rowTop = stave.getYForLine(0)
@@ -142,7 +164,7 @@ export function renderScore(container: HTMLElement, measures: Measure[], opts: R
       layout.measures.push(box)
 
       const m = measures[mi]
-      if (m.length > 0) drawNotes(ctx, stave, m, mi, layout, opts.meter ?? '4/4')
+      if (m.length > 0) drawNotes(ctx, stave, m, mi, layout, opts.meter ?? '4/4', clef)
       x += w
     }
     layout.rows.push({ yTop: rowTop, yBottom: rowBottom })
@@ -157,14 +179,17 @@ function drawNotes(
   mi: number,
   layout: Layout,
   meter: Meter,
+  clef: Clef,
 ): void {
+  const shift = clefShift(clef)
   const vfNotes = m.map((n) => {
     const isRest = n.kind === 'rest'
-    const stemUp = n.step < 6
+    // Plica hacia abajo desde la línea central (Si4 en Sol, Re3 en Fa).
+    const stemUp = n.step - shift < 6
     const note = new StaveNote({
-      keys: [isRest ? 'b/4' : vexKey(n.step)],
+      keys: [isRest ? vexKey(6 + shift) : vexKey(n.step)],
       duration: isRest ? `${n.dur}r` : n.dur,
-      clef: 'treble',
+      clef,
       ...(n.dot ? { dots: 1 } : {}),
       ...(isRest || n.dur === 'w' ? {} : { stemDirection: stemUp ? 1 : -1 }),
     })
@@ -175,6 +200,12 @@ function drawNotes(
       const pos = stemUp ? Modifier.Position.BELOW : Modifier.Position.ABOVE
       if (n.staccato) note.addModifier(new Articulation('a.').setPosition(pos), 0)
       if (n.accent) note.addModifier(new Articulation('a>').setPosition(pos), 0)
+    }
+    if (n.dyn) {
+      note.addModifier(
+        new VfAnnotation(n.dyn).setFont('Times New Roman, serif', 17, 'bold', 'italic').setVerticalJustification(VfAnnotation.VerticalJustify.BOTTOM),
+        0,
+      )
     }
     return note
   })

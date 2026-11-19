@@ -160,6 +160,17 @@ export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onC
             exportar sale tal cual se ve.
           </li>
           <li>
+            Al tocar una nota aparece abajo una barra para <b>cambiar la figura</b> (redonda … semicorchea, también en
+            silencios), poner un <b>matiz</b> (pp … ff: se mantiene hasta el siguiente y cambia el volumen al escuchar) y{' '}
+            <b>copiar / pegar el compás</b> (<kbd>⌘C</kbd> <kbd>⌘V</kbd>): se pega justo después del compás de la nota
+            elegida, en el siguiente si está vacío.
+          </li>
+          <li>
+            <b>Clave, armadura y sonido</b> (botón de deslizadores arriba): clave de Sol o de Fa, armadura escrita (en Sib
+            te dice cómo suena en altura real) y sonido de trompeta o piano. La indicación ♩ = tempo sale sobre el primer
+            compás.
+          </li>
+          <li>
             <b>Pantalla de escritura</b> (botón de las flechas hacia fuera, arriba, o <kbd>F</kbd>): oculta las barras y la
             paleta para escribir con todo el iPad, sobre todo en horizontal. Arriba a la derecha quedan deshacer, escuchar
             y el botón para volver. Mientras suena la partitura la pantalla no se apaga.
@@ -168,7 +179,7 @@ export function HelpModal({ open, onClose, onRecalibrate }: { open: boolean; onC
           <li>
             Mac: <kbd>Espacio</kbd> play/pausa · <kbd>⌘Z</kbd> deshacer · <kbd>⇧⌘Z</kbd> rehacer · <kbd>⌫</kbd> borra la nota · <kbd>↑ ↓</kbd> tono ·{' '}
             <kbd>← →</kbd> navegar · <kbd>#</kbd> <kbd>b</kbd> <kbd>n</kbd> alteraciones · <kbd>S</kbd> staccato · <kbd>A</kbd> acento · <kbd>L</kbd> ligadura ·{' '}
-            <kbd>M</kbd> Notas/Anotar · <kbd>G</kbd> goma · <kbd>F</kbd> pantalla de escritura
+            <kbd>M</kbd> Notas/Anotar · <kbd>G</kbd> goma · <kbd>F</kbd> pantalla de escritura · <kbd>⌘C</kbd> <kbd>⌘V</kbd> copiar/pegar compás
           </li>
         </ul>
       </div>

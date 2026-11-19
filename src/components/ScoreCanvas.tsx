@@ -1,6 +1,6 @@
 import { animate, AnimatePresence, motion } from 'framer-motion'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { Annotation, Background, EditMode, LoopRange, Measure, Meter, Note, Pt, Stroke, Transposition } from '../types'
+import type { Annotation, Background, Clef, EditMode, LoopRange, Measure, Meter, Note, Pt, Stroke, Transposition } from '../types'
 import { engine } from '../audio/engine'
 import { bbox } from '../recognition/geometry'
 import { clusterStrokes, detectBeams, isScratchOut, slurEnds, splitByHeads, STAFF_GAP } from '../recognition/recognize'
@@ -8,6 +8,8 @@ import { boxesNear } from '../recognition/geometry'
 import { recognizePersonal } from '../recognition/personal'
 import {
   clampStep,
+  clefShift,
+  keyAccidental,
   describeDiff,
   effectiveAccidental,
   makeNote,
@@ -74,6 +76,12 @@ interface Props {
   onScan: () => void
   /** Métrica de la partitura: decide cuándo un compás está completo. */
   meter: Meter
+  /** Clave: en Fa, la misma línea es una nota más grave (12 pasos). */
+  clef: Clef
+  /** Armadura escrita (quintas): decide cómo suena una nota sin alteración. */
+  keySig: number
+  /** Tempo para la indicación ♩ = bpm (no se dibuja sobre una partitura escaneada). */
+  bpm: number
   /** Zoom de Mila (pellizco): 1 = hoja ajustada al ancho. */
   userZoom: number
   onUserZoom: (z: number) => void
@@ -148,8 +156,8 @@ export function ScoreCanvas(p: Props) {
       host,
       p.measures,
       bg
-        ? { meter: p.meter, width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH, rowWidths: bg.rowWidths }
-        : { meter: p.meter, width },
+        ? { meter: p.meter, clef: p.clef, key: p.keySig, width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH, rowWidths: bg.rowWidths }
+        : { meter: p.meter, clef: p.clef, key: p.keySig, bpm: p.bpm, width },
     )
     layoutRef.current = l
     if (import.meta.env.DEV) (window as unknown as { __milaLayout?: Layout }).__milaLayout = l
@@ -175,7 +183,7 @@ export function ScoreCanvas(p: Props) {
       })
       if (fresh.length) setBursts((b) => [...b, ...fresh])
     }
-  }, [p.measures, width, bg?.layoutWidth, bg?.perRow, bg?.rowH, bg?.rowWidths])
+  }, [p.measures, width, bg?.layoutWidth, bg?.perRow, bg?.rowH, bg?.rowWidths, p.clef, p.keySig, p.bpm, p.meter])
 
   // ---- Canvas de tinta ----------------------------------------------------
   /** Tinta aún sin convertir; `measure` = compás donde se escribió (-1 fuera de los pentagramas). */
@@ -397,7 +405,10 @@ export function ScoreCanvas(p: Props) {
         else if (beamsHere === 1 && dur === 'q') dur = '8'
       }
       const note =
-        rec.kind === 'rest' ? makeRest(dur) : makeNote({ dur, step: rec.step, acc: rec.acc ?? '', ...(rec.dot ? { dot: true } : {}) })
+        rec.kind === 'rest'
+          ? makeRest(dur)
+          : // El reconocedor lee posiciones en clave de Sol: en clave de Fa la misma posición es más grave.
+            makeNote({ dur, step: rec.step + clefShift(propsRef.current.clef), acc: rec.acc ?? '', ...(rec.dot ? { dot: true } : {}) })
       inserts.push({ measure: mbox.index, x: rec.x, note, row })
     }
 
@@ -548,7 +559,7 @@ export function ScoreCanvas(p: Props) {
         const last = inserts[inserts.length - 1].note
         popRef.current = inserts.map((i) => i.note.id)
         cur.onSelect(last.id)
-        if (last.kind === 'note') void engine.preview(soundingMidi(writtenMidi(last.step, last.acc), cur.transposition), 260)
+        if (last.kind === 'note') void engine.preview(soundingMidi(writtenMidi(last.step, last.acc || keyAccidental(last.step, cur.keySig)), cur.transposition), 260)
       } else {
         popRef.current = [...accOnExisting.keys(), ...slurOnExisting, ...dotOnExisting]
       }
@@ -910,7 +921,7 @@ export function ScoreCanvas(p: Props) {
     const t = a.target!
     const id = t.id
     const delta = Math.round((a.startY - y) / (STAFF_GAP / 2))
-    const step = clampStep(a.startStep + delta)
+    const step = clampStep(a.startStep + delta, propsRef.current.clef)
     if (step === a.lastStep) return
     a.lastStep = step
     const record = !a.recorded
@@ -929,7 +940,7 @@ export function ScoreCanvas(p: Props) {
       record,
     )
     const m = cur.measures[t.measure]
-    const acc = m ? effectiveAccidental(m.map((n) => (n.id === id ? { ...n, step } : n)), t.index) : ''
+    const acc = m ? effectiveAccidental(m.map((n) => (n.id === id ? { ...n, step } : n)), t.index, cur.keySig) : ''
     void engine.preview(soundingMidi(writtenMidi(step, acc), cur.transposition), 200)
   }
 

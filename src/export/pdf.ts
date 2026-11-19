@@ -1,6 +1,7 @@
 import type { Annotation, Background, Score } from '../types'
 import { getImage } from '../state/library'
 import { type Layout, renderScore } from '../notation/renderScore'
+import { clampKey } from '../state/music'
 import { drawAnnotations } from '../notation/annotations'
 
 const PAGE_W = 595.28
@@ -144,7 +145,7 @@ async function renderAsSeen(score: Score, scale: number): Promise<AsSeen> {
   const bg = score.background!
   const host = offscreenHost()
   try {
-    const layout = renderScore(host, score.measures, { meter: score.meter, width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH, rowWidths: bg.rowWidths })
+    const layout = renderScore(host, score.measures, { meter: score.meter, clef: score.clef, key: clampKey(score.key), width: bg.layoutWidth, perRow: bg.perRow, rowH: bg.rowH, rowWidths: bg.rowWidths })
     const dw = bg.layoutWidth * bg.scale
     const dh = dw * (bg.naturalH / bg.naturalW)
     const height = Math.ceil(Math.max(layout.height, bg.y + dh + 24))
@@ -218,6 +219,8 @@ export async function scoreToPdf(score: Score): Promise<Blob> {
 
       const layout = renderScore(host, slice, {
         meter: score.meter,
+        clef: score.clef,
+        key: clampKey(score.key),
         width: RENDER_W,
         perRow: PER_ROW,
         firstIndex: cursor,
@@ -297,7 +300,7 @@ export async function scoreToPng(score: Score): Promise<Blob> {
     const sheet = score.background
       ? (await renderAsSeen(score, (SCALE * W) / score.background.layoutWidth)).canvas
       : await (async () => {
-          const layout = renderScore(host, measures, { meter: score.meter, width: W, perRow: PER_ROW, measureNumbers: true })
+          const layout = renderScore(host, measures, { meter: score.meter, clef: score.clef, key: clampKey(score.key), width: W, perRow: PER_ROW, measureNumbers: true })
           const svg = host.querySelector('svg') as SVGElement
           return rasterize(svg, layout, SCALE, score.annotations ?? [], 0)
         })()

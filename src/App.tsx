@@ -17,13 +17,16 @@ import { Toast, Modal as UiModal } from './components/ui'
 import { EXAMPLES, emptyScore } from './state/examples'
 import {
   buildEvents,
+  clampKey,
   clampStep,
   effectiveAccidental,
   soundingMidi,
   writtenMidi,
 } from './state/music'
 import { useScore } from './state/useScore'
-import type { Background, EditMode, LoopRange, Meter, Note, Score, Transposition, TupletKind } from './types'
+import type { Background, Duration, Dynamic, EditMode, LoopRange, Measure, Meter, Note, Score, Transposition, TupletKind } from './types'
+import { NoteTools } from './components/NoteTools'
+import { ScoreSettings } from './components/ScoreSettings'
 import { fileSlug, parseMilaFile, type SavedScore, toMilaFile } from './state/library'
 import { useLibrary } from './state/useLibrary'
 import { saveFileAs } from './export/share'
@@ -39,7 +42,7 @@ import { useUpdateReady, useWakeLock } from './state/pwa'
 import { IconButton } from './components/ui'
 import { TOP_PAD } from './notation/renderScore'
 
-type Modal = 'tuner' | 'export' | 'help' | 'clear' | 'gallery' | 'scan' | null
+type Modal = 'tuner' | 'export' | 'help' | 'clear' | 'gallery' | 'scan' | 'settings' | null
 
 const NO_ANNOTATIONS: never[] = []
 
@@ -60,6 +63,9 @@ export default function App() {
   const { score } = api
   /** Métrica de la partitura (las antiguas, sin este dato, son 4/4). */
   const meter: Meter = score.meter ?? '4/4'
+  /** Armadura escrita (quintas) y clave. */
+  const keySig = clampKey(score.key)
+  const clef = score.clef ?? 'treble'
   const lib = useLibrary(score)
 
   const [dark, setDark] = useState(() => localStorage.getItem('mila:theme') === 'dark')
@@ -129,6 +135,8 @@ export default function App() {
   }, [])
 
   // ---- Motor de audio ------------------------------------------------------
+  useEffect(() => engine.setSound(score.sound ?? 'trumpet'), [score.sound])
+
   useEffect(() => {
     engine.onCursor = (c) => setCursorId(c?.noteId ?? null)
     engine.onBeat = () => transportRef.current?.pulse()
@@ -151,7 +159,7 @@ export default function App() {
 
   const startPlayback = useCallback(async () => {
     const range = loopOn && loopRange ? loopRange : { start: 0, end: lastUsed }
-    const { events, totalUnits } = buildEvents(score.measures, score.transposition, range, meter)
+    const { events, totalUnits } = buildEvents(score.measures, score.transposition, range, meter, keySig)
     if (events.length === 0) {
       showToast('Escribe alguna nota para poder escucharla.', 'warn')
       return
@@ -161,7 +169,7 @@ export default function App() {
     setMetroOnly(false)
     await engine.play({ events, totalUnits, loop: loopOn, bpm: score.bpm })
     setPlaying(true)
-  }, [loopOn, loopRange, lastUsed, score.measures, score.transposition, score.bpm, meter, metro, showToast])
+  }, [loopOn, loopRange, lastUsed, score.measures, score.transposition, score.bpm, meter, keySig, metro, showToast])
 
   const stopPlayback = useCallback(() => {
     engine.stop(false)
@@ -185,7 +193,7 @@ export default function App() {
       return
     }
     if (engine.isPlaying) void startRef.current()
-  }, [score.transposition, meter, loopOn, loopRange])
+  }, [score.transposition, meter, keySig, loopOn, loopRange])
 
   const setBpm = useCallback(
     (v: number) => {
@@ -250,10 +258,10 @@ export default function App() {
     (note: Note, mi: number, idx: number, patch: Partial<Note> = {}) => {
       if (note.kind !== 'note') return
       const m = score.measures[mi].map((n, i) => (i === idx ? { ...n, ...patch } : n))
-      const acc = effectiveAccidental(m, idx)
+      const acc = effectiveAccidental(m, idx, keySig)
       void engine.preview(soundingMidi(writtenMidi(m[idx].step, acc), score.transposition), 240)
     },
-    [score.measures, score.transposition],
+    [score.measures, score.transposition, keySig],
   )
 
   const onAcc = useCallback(
@@ -322,13 +330,57 @@ export default function App() {
   const nudgePitch = useCallback(
     (d: number) => {
       if (!selected || selected.note.kind !== 'note') return
-      const step = clampStep(selected.note.step + d)
+      const step = clampStep(selected.note.step + d, clef)
       if (step === selected.note.step) return
       editSelected((n) => ({ ...n, step }))
       previewNote(selected.note, selected.mi, selected.idx, { step })
     },
-    [selected, editSelected, previewNote],
+    [selected, editSelected, previewNote, clef],
   )
+
+  /** Cambia la figura de la nota (o silencio) seleccionada. */
+  const onDur = useCallback(
+    (dur: Duration) => {
+      if (!selected || selected.note.dur === dur) return
+      editSelected((n) => ({ ...n, dur }))
+    },
+    [selected, editSelected],
+  )
+
+  /** Matiz desde la nota seleccionada (se mantiene hasta el siguiente). Tocar el mismo lo quita. */
+  const onDyn = useCallback(
+    (d: Dynamic) => {
+      if (!selected) return
+      editSelected((n) => {
+        if (n.dyn === d) {
+          const { dyn: _off, ...rest } = n
+          void _off
+          return rest
+        }
+        return { ...n, dyn: d }
+      })
+    },
+    [selected, editSelected],
+  )
+
+  // ---- Copiar y pegar compases ----------------------------------------------
+  const [clip, setClip] = useState<Measure | null>(null)
+  const copyMeasure = useCallback(() => {
+    if (!selected) return
+    const m = score.measures[selected.mi]
+    if (!m.length) return
+    setClip(m)
+    showToast(`Compás ${selected.mi + 1} copiado · toca una nota y Pegar para ponerlo después`)
+  }, [selected, score.measures, showToast])
+  const pasteMeasure = useCallback(() => {
+    if (!clip || !selected) return
+    stopPlayback()
+    const r = api.pasteMeasure(selected.mi, clip)
+    if (!r) return showToast('No caben más compases (máximo 64)', 'warn')
+    // Queda seleccionado el compás pegado: pegar otra vez sigue hacia delante.
+    if (r.firstId) setSelectedId(r.firstId)
+    showToast(`Pegado en el compás ${r.index + 1}`)
+  }, [clip, selected, api, stopPlayback, showToast])
 
   const moveSelection = useCallback(
     (d: number) => {
@@ -649,6 +701,8 @@ export default function App() {
     zoomOut: () => zoomBy(0.8),
     zoomReset: () => setUserZoom(1),
     focus: () => setFocus((v) => !v),
+    copy: () => copyMeasure(),
+    paste: () => pasteMeasure(),
   }
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -663,6 +717,8 @@ export default function App() {
       if (mod && e.key.toLowerCase() === 'z') return run(e.shiftKey ? 'redo' : 'undo')
       if (mod && e.key.toLowerCase() === 'y') return run('redo')
       if (mod && e.key.toLowerCase() === 's') return run('save')
+      if (mod && e.key.toLowerCase() === 'c' && !window.getSelection()?.toString()) return run('copy')
+      if (mod && e.key.toLowerCase() === 'v') return run('paste')
       if (mod && (e.key === '=' || e.key === '+')) return run('zoomIn')
       if (mod && e.key === '-') return run('zoomOut')
       if (mod && e.key === '0') return run('zoomReset')
@@ -752,6 +808,7 @@ export default function App() {
           showToast(fingerDraw ? 'Solo Apple Pencil / ratón dibujan' : 'Ahora el dedo también dibuja')
         }}
         onFocus={() => setFocus(true)}
+        onSettings={() => setModal('settings')}
       />
       )}
 
@@ -807,6 +864,23 @@ export default function App() {
               </span>
             </div>
           )}
+          {/* Encima de Notas/Anotar/Goma (abajo la hoja suele estar libre; arriba taparía el primer pentagrama). */}
+          <div className="pointer-events-none absolute bottom-[68px] left-4 right-[170px] z-40 flex items-end">
+
+            <AnimatePresence>
+              {selected && mode === 'notes' && !bgPanel && (
+                <NoteTools
+                  note={selected.note}
+                  onDur={onDur}
+                  onDyn={onDyn}
+                  canCopy={score.measures[selected.mi].length > 0}
+                  canPaste={!!clip}
+                  onCopy={copyMeasure}
+                  onPaste={pasteMeasure}
+                />
+              )}
+            </AnimatePresence>
+          </div>
           <ScoreCanvas
             measures={score.measures}
             transposition={score.transposition}
@@ -829,6 +903,9 @@ export default function App() {
             onBackground={onBackground}
             onScan={() => setModal('scan')}
             meter={meter}
+            clef={clef}
+            keySig={keySig}
+            bpm={score.bpm}
             userZoom={userZoom}
             onUserZoom={setUserZoom}
           />
@@ -936,6 +1013,7 @@ export default function App() {
       />
       )}
 
+      <ScoreSettings open={modal === 'settings'} onClose={() => setModal(null)} score={score} onChange={(p) => api.patch(p)} />
       <Tuner open={modal === 'tuner'} onClose={() => setModal(null)} transposition={score.transposition} />
       <ExportModal open={modal === 'export'} onClose={() => setModal(null)} score={score} onToast={showToast} />
       <HelpModal

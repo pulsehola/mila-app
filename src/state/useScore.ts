@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Annotation, Background, Measure, Score } from '../types'
+import type { Annotation, Background, Measure, Note, Score } from '../types'
 import { emptyScore } from './examples'
-import { isMeter, measureCapacity, measureUnits } from './music'
+import { clampKey, isDynamic, isMeter, measureCapacity, measureUnits, newId } from './music'
 import { useOnHide } from './pwa'
 
 const KEY = 'mila:v1'
@@ -48,7 +48,14 @@ export function normalizeScore(raw: unknown): Score | null {
     typeof (n as { id?: unknown }).id === 'string' &&
     ['w', 'h', 'q', '8', '16'].includes((n as { dur: string }).dur) &&
     ['note', 'rest'].includes((n as { kind: string }).kind)
-  const measures = s.measures.slice(0, MAX_MEASURES).map((m) => (Array.isArray(m) ? m.filter(okNote) : []))
+  // Un matiz desconocido se descarta (la nota se conserva).
+  const cleanNote = (n: Note): Note => {
+    if (n.dyn === undefined || isDynamic(n.dyn)) return n
+    const { dyn: _drop, ...rest } = n
+    void _drop
+    return rest
+  }
+  const measures = s.measures.slice(0, MAX_MEASURES).map((m) => (Array.isArray(m) ? m.filter(okNote).map(cleanNote) : []))
   const okAnnot = (a: unknown): a is Annotation =>
     !!a &&
     typeof a === 'object' &&
@@ -67,6 +74,9 @@ export function normalizeScore(raw: unknown): Score | null {
     bpm: typeof s.bpm === 'number' ? Math.max(30, Math.min(240, Math.round(s.bpm))) : 96,
     transposition: s.transposition === 'C' ? 'C' : 'Bb',
     ...(isMeter(s.meter) && s.meter !== '4/4' ? { meter: s.meter } : {}),
+    ...(s.clef === 'bass' ? { clef: 'bass' as const } : {}),
+    ...(clampKey(s.key) !== 0 ? { key: clampKey(s.key) } : {}),
+    ...(s.sound === 'piano' ? { sound: 'piano' as const } : {}),
     measures: measures as Measure[],
   }
 }
@@ -107,7 +117,12 @@ export interface ScoreApi {
   /** Reemplaza los compases. `record=false` aplica un cambio transitorio (p.ej. arrastre) sin historial. */
   setMeasures: (fn: (m: Measure[]) => Measure[], record?: boolean) => void
   setAnnotations: (fn: (a: Annotation[]) => Annotation[], record?: boolean) => void
-  patch: (p: Partial<Pick<Score, 'bpm' | 'transposition' | 'title' | 'meter'>>) => void
+  patch: (p: Partial<Pick<Score, 'bpm' | 'transposition' | 'title' | 'meter' | 'clef' | 'key' | 'sound'>>) => void
+  /**
+   * Pega una copia de `measure` justo después del compás `after`: si el siguiente está vacío lo rellena; si no,
+   * inserta un compás nuevo (las anotaciones de los compases siguientes se desplazan con ellos).
+   */
+  pasteMeasure: (after: number, measure: Measure) => { index: number; firstId: string | null } | null
   /** Fondo escaneado. `record` = guardar en deshacer (poner/quitar sí; mover un deslizador no). */
   setBackground: (bg: Background | undefined, record?: boolean) => void
   replace: (s: Score) => void
@@ -193,8 +208,35 @@ export function useScore(): ScoreApi {
     force((n) => n + 1)
   }, [])
 
-  const patch = useCallback((p: Partial<Pick<Score, 'bpm' | 'transposition' | 'title' | 'meter'>>) => {
+  const patch = useCallback((p: Partial<Pick<Score, 'bpm' | 'transposition' | 'title' | 'meter' | 'clef' | 'key' | 'sound'>>) => {
+    scoreRef.current = { ...scoreRef.current, ...p }
     setScore((s) => ({ ...s, ...p }))
+  }, [])
+
+  const pasteMeasure = useCallback((after: number, measure: Measure): { index: number; firstId: string | null } | null => {
+    const cur = scoreRef.current
+    const target = after + 1
+    // Copia con ids nuevos (también los de tresillos) para no chocar con el original.
+    const tupletIds = new Map<string, string>()
+    const copy: Measure = measure.map((n) => ({
+      ...n,
+      id: newId(),
+      ...(n.tuplet ? { tuplet: { ...n.tuplet, id: tupletIds.get(n.tuplet.id) ?? (tupletIds.set(n.tuplet.id, newId()), tupletIds.get(n.tuplet.id)!) } } : {}),
+    }))
+    const fill = target < cur.measures.length && cur.measures[target].length === 0
+    if (!fill && cur.measures.length >= MAX_MEASURES) return null
+    push(snap())
+    const measures = fill
+      ? cur.measures.map((m, i) => (i === target ? copy : m))
+      : [...cur.measures.slice(0, target), copy, ...cur.measures.slice(target)]
+    const annotations = fill
+      ? (cur.annotations ?? [])
+      : (cur.annotations ?? []).map((a) => (a.measure >= target ? { ...a, measure: a.measure + 1 } : a))
+    const next = { ...cur, measures: withTrailingMeasure(measures, measureCapacity(cur.meter)), annotations }
+    scoreRef.current = next
+    setScore(next)
+    force((n) => n + 1)
+    return { index: target, firstId: copy[0]?.id ?? null }
   }, [])
 
   const replace = useCallback((s: Score) => {
@@ -267,6 +309,7 @@ export function useScore(): ScoreApi {
     redo,
     addMeasure,
     removeLastMeasure,
+    pasteMeasure,
     clear,
     clearAll,
   }
